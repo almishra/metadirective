@@ -93,6 +93,7 @@ __OMP_DIRECTIVE_EXT(parallel_master_taskloop_simd,
                     "parallel master taskloop simd")
 __OMP_DIRECTIVE(depobj)
 __OMP_DIRECTIVE(scan)
+__OMP_DIRECTIVE(metadirective)
 __OMP_DIRECTIVE_EXT(begin_declare_variant, "begin declare variant")
 __OMP_DIRECTIVE_EXT(end_declare_variant, "end declare variant")
 
@@ -199,6 +200,7 @@ __OMP_CLAUSE(exclusive, OMPExclusiveClause)
 __OMP_CLAUSE(uses_allocators, OMPUsesAllocatorsClause)
 __OMP_CLAUSE(affinity, OMPAffinityClause)
 __OMP_CLAUSE(use_device_addr, OMPUseDeviceAddrClause)
+__OMP_CLAUSE(when,  OMPWhenClause)
 
 __OMP_CLAUSE_NO_CLASS(uniform)
 __OMP_CLAUSE_NO_CLASS(device_type)

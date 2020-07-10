@@ -1881,6 +1881,7 @@ public:
       STMT_SEH_TRY,               // SEHTryStmt
 
       // OpenMP directives
+      STMT_OMP_META_DIRECTIVE,
       STMT_OMP_PARALLEL_DIRECTIVE,
       STMT_OMP_SIMD_DIRECTIVE,
       STMT_OMP_FOR_DIRECTIVE,

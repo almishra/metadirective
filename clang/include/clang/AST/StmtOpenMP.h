@@ -345,6 +345,44 @@ public:
   }
 };
 
+/// This represents '#pragma omp metadirective' directive.
+///
+/// \code
+/// #pragma omp metadirective when(user={condition(N>10)}: parallel for)
+/// \endcode
+/// In this example directive '#pragma omp metadirective' has clauses 'when'
+/// with a dynamic user condition to check if a variable 'N > 10'
+///
+class OMPMetaDirective final : public OMPExecutableDirective {
+  friend class ASTStmtReader;
+  Stmt *IfStmt;
+
+  OMPMetaDirective(SourceLocation StartLoc, SourceLocation EndLoc,
+                   unsigned NumClauses)
+      : OMPExecutableDirective(this, OMPMetaDirectiveClass,
+                               llvm::omp::OMPD_metadirective, StartLoc, EndLoc,
+                               NumClauses, 1) {}
+  explicit OMPMetaDirective(unsigned NumClauses)
+      : OMPExecutableDirective(this, OMPMetaDirectiveClass,
+                               llvm::omp::OMPD_metadirective, SourceLocation(),
+                               SourceLocation(), NumClauses, 1) {}
+
+public:
+  static OMPMetaDirective *Create(const ASTContext &C, SourceLocation StartLoc,
+                                  SourceLocation EndLoc,
+                                  ArrayRef<OMPClause *> Clauses,
+                                  Stmt *AssociatedStmt, Stmt *IfStmt);
+  static OMPMetaDirective *CreateEmpty(const ASTContext &C, unsigned NumClauses,
+                                       EmptyShell);
+
+  void setIfStmt(Stmt *stmt) { IfStmt = stmt; }
+  Stmt *getIfStmt() const { return IfStmt; }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPMetaDirectiveClass;
+  }
+};
+
 /// This represents '#pragma omp parallel' directive.
 ///
 /// \code

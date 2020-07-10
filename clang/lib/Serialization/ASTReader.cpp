@@ -11741,6 +11741,9 @@ OMPClause *ASTRecordReader::readOMPClause() {
 OMPClause *OMPClauseReader::readClause() {
   OMPClause *C = nullptr;
   switch (llvm::omp::Clause(Record.readInt())) {
+  case llvm::omp::OMPC_when:
+    C = new (Context) OMPWhenClause();
+    break;
   case llvm::omp::OMPC_if:
     C = new (Context) OMPIfClause();
     break;
@@ -12054,6 +12057,11 @@ void OMPClauseReader::VisitOMPAllocatorClause(OMPAllocatorClause *C) {
 
 void OMPClauseReader::VisitOMPCollapseClause(OMPCollapseClause *C) {
   C->setNumForLoops(Record.readSubExpr());
+  C->setLParenLoc(Record.readSourceLocation());
+}
+
+void OMPClauseReader::VisitOMPWhenClause(OMPWhenClause *C) {
+  C->setExpr(Record.readSubExpr());
   C->setLParenLoc(Record.readSourceLocation());
 }
 

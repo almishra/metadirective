@@ -155,6 +155,7 @@ const OMPClauseWithPreInit *OMPClauseWithPreInit::get(const OMPClause *C) {
   case OMPC_exclusive:
   case OMPC_uses_allocators:
   case OMPC_affinity:
+  case OMPC_when:
     break;
   default:
     break;
@@ -249,6 +250,7 @@ const OMPClauseWithPostUpdate *OMPClauseWithPostUpdate::get(const OMPClause *C) 
   case OMPC_exclusive:
   case OMPC_uses_allocators:
   case OMPC_affinity:
+  case OMPC_when:
     break;
   default:
     break;
@@ -1491,6 +1493,15 @@ OMPAffinityClause *OMPAffinityClause::CreateEmpty(const ASTContext &C,
 //===----------------------------------------------------------------------===//
 //  OpenMP clauses printing methods
 //===----------------------------------------------------------------------===//
+void OMPClausePrinter::VisitOMPWhenClause(OMPWhenClause *Node) {
+  if (Node->getExpr() != NULL) {
+    OS << "when(";
+    Node->getExpr()->printPretty(OS, nullptr, Policy, 0);
+    OS << ": ";
+  } else {
+    OS << "default(";
+  }
+}
 
 void OMPClausePrinter::VisitOMPIfClause(OMPIfClause *Node) {
   OS << "if(";

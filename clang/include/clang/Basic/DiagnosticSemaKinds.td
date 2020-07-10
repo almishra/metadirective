@@ -10308,6 +10308,9 @@ def err_omp_allocator_used_in_clauses : Error<
   "data-sharing or data-mapping attribute clauses">;
 def err_omp_allocator_not_in_uses_allocators : Error<
   "allocator must be specified in the 'uses_allocators' clause">;
+def err_omp_misplaced_default_clause : Error<
+  "misplaced default clause! Only one default clause is allowed in "
+  "metadirective in the end">;
 } // end of OpenMP category
 
 let CategoryName = "Related Result Type Issue" in {
