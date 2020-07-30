@@ -2102,7 +2102,7 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
       Actions.EndOpenMPClause();
       // Consume trailing ')' if any
       if (Tok.is(tok::r_paren))
-        ConsumeToken();
+        ConsumeAnyToken();
     }
     // End location of the directive.
     EndLoc = Tok.getLocation();
@@ -2559,9 +2559,8 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
     ErrorFound = true;
     WrongDirective = true;
   }
-  switch (CKind) {
-  case OMPC_default:
-  case OMPC_when: {
+
+  if (CKind == OMPC_default || CKind == OMPC_when) {
     SourceLocation Loc = ConsumeToken();
     SourceLocation DelimLoc;
     // Parse '('.
@@ -2589,36 +2588,40 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
     }
     OpenMPDirectiveKind DirKind = OMPD_unknown;
     SmallVector<OMPClause *, 5> Clauses;
-    if (!Tok.is(tok::r_paren)) {
+
+    if (Tok.isNot(tok::r_paren)) {
       DirKind = parseOpenMPDirectiveKind(*this);
       Tok.setKind(tok::identifier);
       ConsumeToken();
       int paren = 0;
-      while (Tok.isNot(tok::r_paren) || paren != 0) {
-        if (Tok.is(tok::l_paren))
-          paren++;
-        if (Tok.is(tok::r_paren))
-          paren--;
+      if(Tok.isNot(tok::r_paren)) {
+        while (Tok.isNot(tok::r_paren) || paren != 0) {
+          if (Tok.is(tok::l_paren))
+            paren++;
+          if (Tok.is(tok::r_paren))
+            paren--;
 
-        OpenMPClauseKind CKind = Tok.isAnnotation()
+          OpenMPClauseKind CKind = Tok.isAnnotation()
                                      ? OMPC_unknown
                                      : getOpenMPClauseKind(PP.getSpelling(Tok));
-        Actions.StartOpenMPClause(CKind);
-        OMPClause *Clause =
-            ParseOpenMPClause(DirKind, CKind, !FirstClauses[(unsigned)CKind].getInt());
-        FirstClauses[(unsigned)CKind].setInt(true);
-        if (Clause) {
-          FirstClauses[(unsigned)CKind].setPointer(Clause);
-          Clauses.push_back(Clause);
-        }
+          Actions.StartOpenMPClause(CKind);
 
-        // Skip ',' if any.
-        if (Tok.is(tok::comma))
-          ConsumeToken();
-        Actions.EndOpenMPClause();
+          OMPClause *Clause = ParseOpenMPClause(DirKind, CKind, 
+                                       !FirstClauses[(unsigned)CKind].getInt());
+          FirstClauses[(unsigned)CKind].setInt(true);
+          if (Clause) {
+            FirstClauses[(unsigned)CKind].setPointer(Clause);
+            Clauses.push_back(Clause);
+          }
+
+          // Skip ',' if any.
+          if (Tok.is(tok::comma))
+            ConsumeToken();
+          Actions.EndOpenMPClause();
+        }
+        // Consume )
+        ConsumeToken();
       }
-      // Consume )
-      ConsumeToken();
     }
 
     if (WrongDirective)
@@ -2626,80 +2629,12 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
 
     Clause = Actions.ActOnOpenMPWhenClause(expr, DirKind, Clauses, Loc,
                                            DelimLoc, Tok.getLocation());
-    break;
-  }
-  case OMPC_final:
-  case OMPC_num_threads:
-  case OMPC_safelen:
-  case OMPC_simdlen:
-  case OMPC_collapse:
-  case OMPC_ordered:
-  case OMPC_device:
-  case OMPC_num_teams:
-  case OMPC_thread_limit:
-  case OMPC_priority:
-  case OMPC_grainsize:
-  case OMPC_num_tasks:
-  case OMPC_hint:
-  case OMPC_allocator:
-  case OMPC_proc_bind:
-  case OMPC_atomic_default_mem_order:
-  case OMPC_order:
-  case OMPC_schedule:
-  case OMPC_dist_schedule:
-  case OMPC_defaultmap:
-  case OMPC_if:
-  case OMPC_nowait:
-  case OMPC_untied:
-  case OMPC_mergeable:
-  case OMPC_read:
-  case OMPC_write:
-  case OMPC_update:
-  case OMPC_capture:
-  case OMPC_seq_cst:
-  case OMPC_acq_rel:
-  case OMPC_acquire:
-  case OMPC_release:
-  case OMPC_relaxed:
-  case OMPC_threads:
-  case OMPC_simd:
-  case OMPC_nogroup:
-  case OMPC_unified_address:
-  case OMPC_unified_shared_memory:
-  case OMPC_reverse_offload:
-  case OMPC_dynamic_allocators:
-  case OMPC_private:
-  case OMPC_firstprivate:
-  case OMPC_lastprivate:
-  case OMPC_shared:
-  case OMPC_reduction:
-  case OMPC_task_reduction:
-  case OMPC_in_reduction:
-  case OMPC_linear:
-  case OMPC_aligned:
-  case OMPC_copyin:
-  case OMPC_copyprivate:
-  case OMPC_flush:
-  case OMPC_depend:
-  case OMPC_map:
-  case OMPC_to:
-  case OMPC_from:
-  case OMPC_use_device_ptr:
-  case OMPC_is_device_ptr:
-  case OMPC_allocate:
-  case OMPC_nontemporal:
-  case OMPC_device_type:
-  case OMPC_unknown:
-  case OMPC_threadprivate:
-  case OMPC_uniform:
-  case OMPC_match:
-  case OMPC_depobj:
-  case OMPC_destroy:
-  case OMPC_detach:
+  } else {
     ErrorFound = false;
     Diag(Tok, diag::err_omp_unexpected_clause)
         << getOpenMPClauseName(CKind) << getOpenMPDirectiveName(DKind);
   }
+
   return ErrorFound ? nullptr : Clause;
 }
 
