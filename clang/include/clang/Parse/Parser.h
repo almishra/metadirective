@@ -3142,7 +3142,7 @@ private:
   /// \param CKind Kind of current clause.
   ///
   OMPClause *ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
-                                   OpenMPClauseKind CKind);
+                                   OpenMPClauseKind CKind, Stmt *AStmt);
   /// Parses clause of kind \a CKind for directive of a kind \a Kind.
   ///
   /// \param DKind Kind of current directive.

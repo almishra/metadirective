@@ -2081,6 +2081,21 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
   switch (DKind) {
   case OMPD_metadirective: {
     ConsumeToken();
+
+    /* Get Stmt and revert back */
+    TentativeParsingAction TPA1(*this);
+    while (Tok.isNot(tok::annot_pragma_openmp_end)) {
+      ConsumeAnyToken();
+    }
+    ConsumeAnnotationToken();
+    ParseScope InnerStmtScope(this, Scope::DeclScope,
+                          getLangOpts().C99 || getLangOpts().CPlusPlus,
+                          Tok.is(tok::l_brace));
+    StmtResult AStmt = ParseStatement();
+    InnerStmtScope.Exit();
+    TPA1.Revert();
+    /*End Get Stmt*/
+
     ParseScope OMPDirectiveScope(this, ScopeFlags);
     Actions.StartOpenMPDSABlock(DKind, DirName, Actions.getCurScope(), Loc);
 
@@ -2089,7 +2104,7 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
                                    ? OMPC_unknown
                                    : getOpenMPClauseKind(PP.getSpelling(Tok));
       Actions.StartOpenMPClause(CKind);
-      OMPClause *Clause = ParseOpenMPMetaClause(DKind, CKind);
+      OMPClause *Clause = ParseOpenMPMetaClause(DKind, CKind, AStmt.get());
       FirstClauses[(unsigned)CKind].setInt(true);
       if (Clause) {
         FirstClauses[(unsigned)CKind].setPointer(Clause);
@@ -2109,25 +2124,19 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
     // Consume final annot_pragma_openmp_end.
     ConsumeAnnotationToken();
 
-    TentativeParsingAction TPA(*this);
-    ParseScope InnerScope(this, Scope::DeclScope, 
-                          getLangOpts().C99 || getLangOpts().CPlusPlus,
-                          Tok.is(tok::l_brace));
-    StmtResult AStmt = ParseStatement();
-    InnerScope.Exit();
-    TPA.Revert();
     for (auto i = Clauses.begin(); i < Clauses.end(); i++) {
       OMPWhenClause *WhenClause = dyn_cast<OMPWhenClause>(*i);
-      if(WhenClause->getDKind() == OMPD_unknown) {
+      if(WhenClause->getDKind() == OMPD_unknown)
         WhenClause->setInnerStmt(AStmt.get());
-      }
     }
 
     // The body is a block scope like in Lambdas and Blocks.
     Actions.ActOnOpenMPRegionStart(DKind, getCurScope());
+    ParsingOpenMPDirectiveRAII NormalScope(*this, /*Value=*/false);
     StmtResult AssociatedStmt = 
         (Sema::CompoundScopeRAII(Actions), ParseStatement());
     AssociatedStmt = Actions.ActOnOpenMPRegionEnd(AssociatedStmt, Clauses);
+
     Directive = Actions.ActOnOpenMPExecutableDirective(
         DKind, DirName, CancelRegion, Clauses, AssociatedStmt.get(), Loc,
         EndLoc);
@@ -2537,7 +2546,7 @@ OMPClause *Parser::ParseOpenMPUsesAllocatorClause(OpenMPDirectiveKind DKind) {
 }
 
 OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
-                                         OpenMPClauseKind CKind) {
+                                         OpenMPClauseKind CKind, Stmt *AStmt) {
   OMPClause *Clause = nullptr;
   bool ErrorFound = false;
   bool WrongDirective = false;
@@ -2588,11 +2597,21 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
     }
     OpenMPDirectiveKind DirKind = OMPD_unknown;
     SmallVector<OMPClause *, 5> Clauses;
+    StmtResult AssociatedStmt;
 
     if (Tok.isNot(tok::r_paren)) {
+      ParsingOpenMPDirectiveRAII DirScope(*this);
+      ParenBraceBracketBalancer BalancerRAIIObj(*this);
+      DeclarationNameInfo DirName;
+      unsigned ScopeFlags = Scope::FnScope | Scope::DeclScope |
+                            Scope::CompoundStmtScope | Scope::OpenMPDirectiveScope;
+
       DirKind = parseOpenMPDirectiveKind(*this);
       Tok.setKind(tok::identifier);
       ConsumeToken();
+      ParseScope OMPDirectiveScope(this, ScopeFlags);
+      Actions.StartOpenMPDSABlock(DirKind, DirName, Actions.getCurScope(), Loc);
+
       int paren = 0;
       if(Tok.isNot(tok::r_paren)) {
         while (Tok.isNot(tok::r_paren) || paren != 0) {
@@ -2622,13 +2641,21 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
         // Consume )
         ConsumeToken();
       }
+
+      Actions.ActOnOpenMPRegionStart(DirKind, getCurScope());
+      ParsingOpenMPDirectiveRAII NormalScope(*this, /*Value=*/false);
+      AssociatedStmt = (Sema::CompoundScopeRAII(Actions), AStmt);
+      AssociatedStmt = Actions.ActOnOpenMPRegionEnd(AssociatedStmt, Clauses);
+      Actions.EndOpenMPDSABlock(nullptr);
+      OMPDirectiveScope.Exit();
     }
 
     if (WrongDirective)
       return nullptr;
 
-    Clause = Actions.ActOnOpenMPWhenClause(expr, DirKind, Clauses, Loc,
-                                           DelimLoc, Tok.getLocation());
+    Clause = Actions.ActOnOpenMPWhenClause(expr, DirKind, Clauses,
+                                           AssociatedStmt.get(), Loc, DelimLoc,
+                                           Tok.getLocation());
   } else {
     ErrorFound = false;
     Diag(Tok, diag::err_omp_unexpected_clause)

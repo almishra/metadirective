@@ -4950,6 +4950,7 @@ StmtResult Sema::ActOnOpenMPExecutableDirective(
     Stmt *S = AStmt;
     while (--ThisCaptureLevel >= 0)
       S = cast<CapturedStmt>(S)->getCapturedStmt();
+
     DSAChecker.Visit(S);
     if (!isOpenMPTargetDataManagementDirective(Kind) &&
         !isOpenMPTaskingDirective(Kind)) {
@@ -6212,6 +6213,7 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
     OMPWhenClause *WhenClause = dyn_cast<OMPWhenClause>(*i);
     Expr *WhenCondExpr = WhenClause->getExpr();
     Stmt *ThenStmt = NULL;
+    Stmt *WhenAStmt = WhenClause->getInnerStmt();
 
     OpenMPDirectiveKind DKind = WhenClause->getDKind();
     DeclarationNameInfo DirName;
@@ -6220,7 +6222,7 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
     StartOpenMPDSABlock(DKind, DirName, getCurScope(), StartLoc);
     if (DKind != OMPD_unknown) {
       ThenStmt = ActOnOpenMPExecutableDirective(DKind, DirName, OMPD_unknown,
-                                            clauses, AStmt, StartLoc, EndLoc)
+                                            clauses, WhenAStmt, StartLoc, EndLoc)
                  .get();
     }
     EndOpenMPDSABlock(ThenStmt);
@@ -13001,11 +13003,12 @@ getListOfPossibleValues(OpenMPClauseKind K, unsigned First, unsigned Last,
 
 OMPClause *Sema::ActOnOpenMPWhenClause(Expr *Expr, OpenMPDirectiveKind DKind,
                                        ArrayRef<OMPClause *> Clauses,
+                                       Stmt *AStmt,
                                        SourceLocation StartLoc,
                                        SourceLocation LParenLoc,
                                        SourceLocation EndLoc) {
   return new (Context)
-      OMPWhenClause(Expr, DKind, Clauses, StartLoc, LParenLoc, EndLoc);
+      OMPWhenClause(Expr, DKind, Clauses, AStmt, StartLoc, LParenLoc, EndLoc);
 }
 
 OMPClause *Sema::ActOnOpenMPDefaultClause(DefaultKind Kind,

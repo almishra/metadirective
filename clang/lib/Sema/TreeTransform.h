@@ -1638,11 +1638,12 @@ public:
   /// Subclasses may override this routine to provide different behavior.
   OMPClause *RebuildOMPWhenClause(Expr *expr, OpenMPDirectiveKind DKind,
                                   ArrayRef<OMPClause *> Clauses,
+                                  Stmt *AStmt,
                                   SourceLocation StartLoc,
                                   SourceLocation LParenLoc,
                                   SourceLocation EndLoc) {
-    return getSema().ActOnOpenMPWhenClause(expr, DKind, Clauses, StartLoc,
-                                           LParenLoc, EndLoc);
+    return getSema().ActOnOpenMPWhenClause(expr, DKind, Clauses, AStmt,
+                                           StartLoc, LParenLoc, EndLoc);
   }
 
   /// Build a new OpenMP 'default' clause.
@@ -9053,8 +9054,9 @@ OMPClause *TreeTransform<Derived>::TransformOMPWhenClause(OMPWhenClause *C) {
   if (E.isInvalid())
     return nullptr;
   return getDerived().RebuildOMPWhenClause(C->getExpr(), C->getDKind(),
-                                           C->getClauses(), C->getBeginLoc(),
-                                           C->getLParenLoc(), C->getEndLoc());
+                                           C->getClauses(), C->getInnerStmt(),
+                                           C->getBeginLoc(), C->getLParenLoc(),
+                                           C->getEndLoc());
 }
 
 template <typename Derived>

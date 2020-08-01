@@ -888,10 +888,11 @@ public:
   /// \param LParenLoc Location of '('.
   /// \param EndLoc Ending location of the clause.
   OMPWhenClause(Expr *expr, OpenMPDirectiveKind dKind,
-                ArrayRef<OMPClause *> clauses, SourceLocation StartLoc,
-                SourceLocation LParenLoc, SourceLocation EndLoc)
-      : OMPClause(llvm::omp::OMPC_when, StartLoc, EndLoc), CondExpr(expr), DKind(dKind),
-        Clauses(clauses), LParenLoc(LParenLoc) {}
+                ArrayRef<OMPClause *> clauses, Stmt *AStmt,
+                SourceLocation StartLoc, SourceLocation LParenLoc,
+                SourceLocation EndLoc)
+      : OMPClause(llvm::omp::OMPC_when, StartLoc, EndLoc), CondExpr(expr),
+        DKind(dKind), Clauses(clauses), InnerStmt(AStmt), LParenLoc(LParenLoc) {}
 
   /// Build an empty clause.
   OMPWhenClause() : OMPClause(llvm::omp::OMPC_when, SourceLocation(), SourceLocation()) {}
