@@ -3288,6 +3288,7 @@ class DSAAttrChecker final : public StmtVisitor<DSAAttrChecker, void> {
 
 public:
   void VisitDeclRefExpr(DeclRefExpr *E) {
+    // Check implicitly captured variables.
     if (TryCaptureCXXThisMembers || E->isTypeDependent() ||
         E->isValueDependent() || E->containsUnexpandedParameterPack() ||
         E->isInstantiationDependent())
@@ -6206,6 +6207,14 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
   if (!AStmt)
     return StmtError();
 
+  auto *CS = cast<CapturedStmt>(AStmt);
+  // 1.2.2 OpenMP Language Terminology
+  // Structured block - An executable statement with a single entry at the
+  // top and a single exit at the bottom.
+  // The point of exit cannot be a branch out of the structured block.
+  // longjmp() and throw() must not violate the entry/exit criteria.
+  CS->getCapturedDecl()->setNothrow();
+
   StmtResult IfStmt = StmtError();
   Stmt *ElseStmt = NULL;
 
@@ -6222,7 +6231,7 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
     StartOpenMPDSABlock(DKind, DirName, getCurScope(), StartLoc);
     if (DKind != OMPD_unknown) {
       ThenStmt = ActOnOpenMPExecutableDirective(DKind, DirName, OMPD_unknown,
-                                            clauses, WhenAStmt, StartLoc, EndLoc)
+                                           clauses, WhenAStmt, StartLoc, EndLoc)
                  .get();
     }
     EndOpenMPDSABlock(ThenStmt);
