@@ -2613,42 +2613,46 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
       Actions.StartOpenMPDSABlock(DirKind, DirName, Actions.getCurScope(), Loc);
 
       int paren = 0;
-      if(Tok.isNot(tok::r_paren)) {
-        while (Tok.isNot(tok::r_paren) || paren != 0) {
-          if (Tok.is(tok::l_paren))
-            paren++;
-          if (Tok.is(tok::r_paren))
-            paren--;
+      while (Tok.isNot(tok::r_paren) || paren != 0) {
+        if (Tok.is(tok::l_paren))
+          paren++;
+        if (Tok.is(tok::r_paren))
+          paren--;
 
-          OpenMPClauseKind CKind = Tok.isAnnotation()
-                                     ? OMPC_unknown
-                                     : getOpenMPClauseKind(PP.getSpelling(Tok));
-          Actions.StartOpenMPClause(CKind);
+        OpenMPClauseKind CKind = Tok.isAnnotation()
+                                   ? OMPC_unknown
+                                   : getOpenMPClauseKind(PP.getSpelling(Tok));
+        Actions.StartOpenMPClause(CKind);
 
-          OMPClause *Clause = ParseOpenMPClause(DirKind, CKind, 
-                                       !FirstClauses[(unsigned)CKind].getInt());
-          FirstClauses[(unsigned)CKind].setInt(true);
-          if (Clause) {
-            FirstClauses[(unsigned)CKind].setPointer(Clause);
-            Clauses.push_back(Clause);
-          }
-
-          // Skip ',' if any.
-          if (Tok.is(tok::comma))
-            ConsumeToken();
-          Actions.EndOpenMPClause();
+        OMPClause *Clause = ParseOpenMPClause(DirKind, CKind,
+                                     !FirstClauses[(unsigned)CKind].getInt());
+        FirstClauses[(unsigned)CKind].setInt(true);
+        if (Clause) {
+          FirstClauses[(unsigned)CKind].setPointer(Clause);
+          Clauses.push_back(Clause);
         }
-        // Consume )
-        ConsumeToken();
+
+        // Skip ',' if any.
+        if (Tok.is(tok::comma))
+          ConsumeToken();
+        Actions.EndOpenMPClause();
       }
 
       Actions.ActOnOpenMPRegionStart(DirKind, getCurScope());
       ParsingOpenMPDirectiveRAII NormalScope(*this, /*Value=*/false);
       AssociatedStmt = (Sema::CompoundScopeRAII(Actions), AStmt);
       AssociatedStmt = Actions.ActOnOpenMPRegionEnd(AssociatedStmt, Clauses);
-      Actions.EndOpenMPDSABlock(nullptr);
+
+      StmtResult Directive = Actions.ActOnOpenMPExecutableDirective(
+          DirKind, DirName, OMPD_unknown, Clauses, AssociatedStmt.get(), Loc,
+          Tok.getLocation());
+
+      Actions.EndOpenMPDSABlock(Directive.get());
       OMPDirectiveScope.Exit();
     }
+
+    // Parse ')'
+    T.consumeClose();
 
     if (WrongDirective)
       return nullptr;
