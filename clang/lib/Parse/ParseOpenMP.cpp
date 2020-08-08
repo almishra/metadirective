@@ -2104,7 +2104,7 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
                                    ? OMPC_unknown
                                    : getOpenMPClauseKind(PP.getSpelling(Tok));
       Actions.StartOpenMPClause(CKind);
-      OMPClause *Clause = ParseOpenMPMetaClause(DKind, CKind, AStmt.get());
+      OMPClause *Clause = ParseOpenMPMetaClause(DKind, CKind);
       FirstClauses[(unsigned)CKind].setInt(true);
       if (Clause) {
         FirstClauses[(unsigned)CKind].setPointer(Clause);
@@ -2546,7 +2546,7 @@ OMPClause *Parser::ParseOpenMPUsesAllocatorClause(OpenMPDirectiveKind DKind) {
 }
 
 OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
-                                         OpenMPClauseKind CKind, Stmt *AStmt) {
+                                         OpenMPClauseKind CKind) {
   OMPClause *Clause = nullptr;
   bool ErrorFound = false;
   bool WrongDirective = false;
@@ -2595,6 +2595,8 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
         return nullptr;
       }
     }
+
+    // Parse Directive
     OpenMPDirectiveKind DirKind = OMPD_unknown;
     SmallVector<OMPClause *, 5> Clauses;
     StmtResult AssociatedStmt;
@@ -2607,7 +2609,6 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
                             Scope::CompoundStmtScope | Scope::OpenMPDirectiveScope;
 
       DirKind = parseOpenMPDirectiveKind(*this);
-      Tok.setKind(tok::identifier);
       ConsumeToken();
       ParseScope OMPDirectiveScope(this, ScopeFlags);
       Actions.StartOpenMPDSABlock(DirKind, DirName, Actions.getCurScope(), Loc);
@@ -2640,6 +2641,19 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
 
       Actions.ActOnOpenMPRegionStart(DirKind, getCurScope());
       ParsingOpenMPDirectiveRAII NormalScope(*this, /*Value=*/false);
+      /* Get Stmt and revert back */
+      TentativeParsingAction TPA(*this);
+      while (Tok.isNot(tok::annot_pragma_openmp_end)) {
+        ConsumeAnyToken();
+      }
+      ConsumeAnnotationToken();
+      ParseScope InnerStmtScope(this, Scope::DeclScope,
+                            getLangOpts().C99 || getLangOpts().CPlusPlus,
+                            Tok.is(tok::l_brace));
+      StmtResult AStmt = ParseStatement();
+      InnerStmtScope.Exit();
+      TPA.Revert();
+      /* End Get Stmt */
       AssociatedStmt = (Sema::CompoundScopeRAII(Actions), AStmt);
       AssociatedStmt = Actions.ActOnOpenMPRegionEnd(AssociatedStmt, Clauses);
 
