@@ -6500,8 +6500,7 @@ void CodeGenFunction::EmitOMPMasterTaskLoopSimdDirective(
 }
 
 void CodeGenFunction::EmitOMPMetaDirective(const OMPMetaDirective &S) {
-  Stmt *I = S.getIfStmt();
-  EmitIfStmt(cast<IfStmt>(*I));
+  EmitStmt(S.getIfStmt());
 }
 
 void CodeGenFunction::EmitOMPParallelMasterTaskLoopDirective(
