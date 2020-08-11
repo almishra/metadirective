@@ -9733,6 +9733,12 @@ void CGOpenMPRuntime::scanForTargetRegionsFunctions(const Stmt *S,
   if (!S)
     return;
 
+  if(isa<OMPMetaDirective>(S)) {
+    const auto &M = *cast<OMPMetaDirective>(S);
+    scanForTargetRegionsFunctions(M.getIfStmt(), ParentName);
+    return;
+  }
+
   // Codegen OMP target directives that offload compute to the device.
   bool RequiresDeviceCodegen =
       isa<OMPExecutableDirective>(S) &&
