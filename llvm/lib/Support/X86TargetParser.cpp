@@ -37,7 +37,12 @@ public:
       set(I);
   }
 
+  bool any() const {
+    return llvm::any_of(Bits, [](uint64_t V) { return V != 0; });
+  }
+
   constexpr FeatureBitset &set(unsigned I) {
+    // GCC <6.2 crashes if this is written in a single statement.
     uint32_t NewBits = Bits[I / 32] | (uint32_t(1) << (I % 32));
     Bits[I / 32] = NewBits;
     return *this;
@@ -48,14 +53,25 @@ public:
     return (Bits[I / 32] & Mask) != 0;
   }
 
+  constexpr FeatureBitset &operator&=(const FeatureBitset &RHS) {
+    for (unsigned I = 0, E = array_lengthof(Bits); I != E; ++I) {
+      // GCC <6.2 crashes if this is written in a single statement.
+      uint32_t NewBits = Bits[I] & RHS.Bits[I];
+      Bits[I] = NewBits;
+    }
+    return *this;
+  }
+
   constexpr FeatureBitset &operator|=(const FeatureBitset &RHS) {
     for (unsigned I = 0, E = array_lengthof(Bits); I != E; ++I) {
+      // GCC <6.2 crashes if this is written in a single statement.
       uint32_t NewBits = Bits[I] | RHS.Bits[I];
       Bits[I] = NewBits;
     }
     return *this;
   }
 
+  // gcc 5.3 miscompiles this if we try to write this using operator&=.
   constexpr FeatureBitset operator&(const FeatureBitset &RHS) const {
     FeatureBitset Result;
     for (unsigned I = 0, E = array_lengthof(Bits); I != E; ++I)
@@ -63,6 +79,7 @@ public:
     return Result;
   }
 
+  // gcc 5.3 miscompiles this if we try to write this using operator&=.
   constexpr FeatureBitset operator|(const FeatureBitset &RHS) const {
     FeatureBitset Result;
     for (unsigned I = 0, E = array_lengthof(Bits); I != E; ++I)
@@ -75,6 +92,13 @@ public:
     for (unsigned I = 0, E = array_lengthof(Bits); I != E; ++I)
       Result.Bits[I] = ~Bits[I];
     return Result;
+  }
+
+  constexpr bool operator!=(const FeatureBitset &RHS) const {
+    for (unsigned I = 0, E = array_lengthof(Bits); I != E; ++I)
+      if (Bits[I] != RHS.Bits[I])
+        return true;
+    return false;
   }
 };
 
@@ -111,10 +135,10 @@ static constexpr FeatureBitset FeaturesPentium4 =
 static constexpr FeatureBitset FeaturesPrescott =
     FeaturesPentium4 | FeatureSSE3;
 static constexpr FeatureBitset FeaturesNocona =
-    FeaturesPrescott | FeatureEM64T | FeatureCMPXCHG16B;
+    FeaturesPrescott | Feature64BIT | FeatureCMPXCHG16B;
 
 // Basic 64-bit capable CPU.
-static constexpr FeatureBitset FeaturesX86_64 = FeaturesPentium4 | FeatureEM64T;
+static constexpr FeatureBitset FeaturesX86_64 = FeaturesPentium4 | Feature64BIT;
 
 // Intel Core CPUs
 static constexpr FeatureBitset FeaturesCore2 =
@@ -201,7 +225,7 @@ static constexpr FeatureBitset FeaturesAthlon =
 static constexpr FeatureBitset FeaturesAthlonXP =
     FeaturesAthlon | FeatureFXSR | FeatureSSE;
 static constexpr FeatureBitset FeaturesK8 =
-    FeaturesAthlonXP | FeatureSSE2 | FeatureEM64T;
+    FeaturesAthlonXP | FeatureSSE2 | Feature64BIT;
 static constexpr FeatureBitset FeaturesK8SSE3 = FeaturesK8 | FeatureSSE3;
 static constexpr FeatureBitset FeaturesAMDFAM10 =
     FeaturesK8SSE3 | FeatureCMPXCHG16B | FeatureLZCNT | FeaturePOPCNT |
@@ -209,7 +233,7 @@ static constexpr FeatureBitset FeaturesAMDFAM10 =
 
 // Bobcat architecture processors.
 static constexpr FeatureBitset FeaturesBTVER1 =
-    FeatureX87 | FeatureCMPXCHG8B | FeatureCMPXCHG16B | FeatureEM64T |
+    FeatureX87 | FeatureCMPXCHG8B | FeatureCMPXCHG16B | Feature64BIT |
     FeatureFXSR | FeatureLZCNT | FeatureMMX | FeaturePOPCNT | FeaturePRFCHW |
     FeatureSSE | FeatureSSE2 | FeatureSSE3 | FeatureSSSE3 | FeatureSSE4_A |
     FeatureSAHF;
@@ -220,7 +244,7 @@ static constexpr FeatureBitset FeaturesBTVER2 =
 // AMD Bulldozer architecture processors.
 static constexpr FeatureBitset FeaturesBDVER1 =
     FeatureX87 | FeatureAES | FeatureAVX | FeatureCMPXCHG8B |
-    FeatureCMPXCHG16B | FeatureEM64T | FeatureFMA4 | FeatureFXSR | FeatureLWP |
+    FeatureCMPXCHG16B | Feature64BIT | FeatureFMA4 | FeatureFXSR | FeatureLWP |
     FeatureLZCNT | FeatureMMX | FeaturePCLMUL | FeaturePOPCNT | FeaturePRFCHW |
     FeatureSAHF | FeatureSSE | FeatureSSE2 | FeatureSSE3 | FeatureSSSE3 |
     FeatureSSE4_1 | FeatureSSE4_2 | FeatureSSE4_A | FeatureXOP | FeatureXSAVE;
@@ -236,7 +260,7 @@ static constexpr FeatureBitset FeaturesBDVER4 =
 static constexpr FeatureBitset FeaturesZNVER1 =
     FeatureX87 | FeatureADX | FeatureAES | FeatureAVX | FeatureAVX2 |
     FeatureBMI | FeatureBMI2 | FeatureCLFLUSHOPT | FeatureCLZERO |
-    FeatureCMPXCHG8B | FeatureCMPXCHG16B | FeatureEM64T | FeatureF16C |
+    FeatureCMPXCHG8B | FeatureCMPXCHG16B | Feature64BIT | FeatureF16C |
     FeatureFMA | FeatureFSGSBASE | FeatureFXSR | FeatureLZCNT | FeatureMMX |
     FeatureMOVBE | FeatureMWAITX | FeaturePCLMUL | FeaturePOPCNT |
     FeaturePRFCHW | FeatureRDRND | FeatureRDSEED | FeatureSAHF | FeatureSHA |
@@ -363,7 +387,7 @@ static constexpr ProcInfo Processors[] = {
 
 X86::CPUKind llvm::X86::parseArchX86(StringRef CPU, bool Only64Bit) {
   for (const auto &P : Processors)
-    if (P.Name == CPU && (P.Features[FEATURE_EM64T] || !Only64Bit))
+    if (P.Name == CPU && (P.Features[FEATURE_64BIT] || !Only64Bit))
       return P.Kind;
 
   return CK_None;
@@ -372,7 +396,7 @@ X86::CPUKind llvm::X86::parseArchX86(StringRef CPU, bool Only64Bit) {
 void llvm::X86::fillValidCPUArchList(SmallVectorImpl<StringRef> &Values,
                                      bool Only64Bit) {
   for (const auto &P : Processors)
-    if (!P.Name.empty() && (P.Features[FEATURE_EM64T] || !Only64Bit))
+    if (!P.Name.empty() && (P.Features[FEATURE_64BIT] || !Only64Bit))
       Values.emplace_back(P.Name);
 }
 
@@ -401,7 +425,6 @@ static constexpr FeatureBitset ImpliedFeaturesCLZERO = {};
 static constexpr FeatureBitset ImpliedFeaturesCMOV = {};
 static constexpr FeatureBitset ImpliedFeaturesCMPXCHG16B = {};
 static constexpr FeatureBitset ImpliedFeaturesCMPXCHG8B = {};
-static constexpr FeatureBitset ImpliedFeaturesEM64T = {};
 static constexpr FeatureBitset ImpliedFeaturesENQCMD = {};
 static constexpr FeatureBitset ImpliedFeaturesFSGSBASE = {};
 static constexpr FeatureBitset ImpliedFeaturesFXSR = {};
@@ -513,32 +536,38 @@ static constexpr FeatureInfo FeatureInfos[X86::CPU_FEATURE_MAX] = {
 #include "llvm/Support/X86TargetParser.def"
 };
 
-// Convert the set bits in FeatureBitset to a list of strings.
-static void getFeatureBitsAsStrings(const FeatureBitset &Bits,
-                                    SmallVectorImpl<StringRef> &Features) {
-  for (unsigned i = 0; i != CPU_FEATURE_MAX; ++i)
-    if (Bits[i] && !FeatureInfos[i].Name.empty())
-      Features.push_back(FeatureInfos[i].Name);
-}
-
 void llvm::X86::getFeaturesForCPU(StringRef CPU,
                                   SmallVectorImpl<StringRef> &EnabledFeatures) {
   auto I = llvm::find_if(Processors,
                          [&](const ProcInfo &P) { return P.Name == CPU; });
   assert(I != std::end(Processors) && "Processor not found!");
 
+  FeatureBitset Bits = I->Features;
+
+  // Remove the 64-bit feature which we only use to validate if a CPU can
+  // be used with 64-bit mode.
+  Bits &= ~Feature64BIT;
+
   // Add the string version of all set bits.
-  getFeatureBitsAsStrings(I->Features, EnabledFeatures);
+  for (unsigned i = 0; i != CPU_FEATURE_MAX; ++i)
+    if (Bits[i] && !FeatureInfos[i].Name.empty())
+      EnabledFeatures.push_back(FeatureInfos[i].Name);
 }
 
 // For each feature that is (transitively) implied by this feature, set it.
 static void getImpliedEnabledFeatures(FeatureBitset &Bits,
                                       const FeatureBitset &Implies) {
+  // Fast path: Implies is often empty.
+  if (!Implies.any())
+    return;
+  FeatureBitset Prev;
   Bits |= Implies;
-  for (unsigned i = 0; i != CPU_FEATURE_MAX; ++i) {
-    if (Implies[i])
-      getImpliedEnabledFeatures(Bits, FeatureInfos[i].ImpliedFeatures);
-  }
+  do {
+    Prev = Bits;
+    for (unsigned i = CPU_FEATURE_MAX; i;)
+      if (Bits[--i])
+        Bits |= FeatureInfos[i].ImpliedFeatures;
+  } while (Prev != Bits);
 }
 
 /// Create bit vector of features that are implied disabled if the feature
@@ -546,17 +575,19 @@ static void getImpliedEnabledFeatures(FeatureBitset &Bits,
 static void getImpliedDisabledFeatures(FeatureBitset &Bits, unsigned Value) {
   // Check all features looking for any dependent on this feature. If we find
   // one, mark it and recursively find any feature that depend on it.
-  for (unsigned i = 0; i != CPU_FEATURE_MAX; ++i) {
-    if (FeatureInfos[i].ImpliedFeatures[Value]) {
-      Bits.set(i);
-      getImpliedDisabledFeatures(Bits, i);
-    }
-  }
+  FeatureBitset Prev;
+  Bits.set(Value);
+  do {
+    Prev = Bits;
+    for (unsigned i = 0; i != CPU_FEATURE_MAX; ++i)
+      if ((FeatureInfos[i].ImpliedFeatures & Bits).any())
+        Bits.set(i);
+  } while (Prev != Bits);
 }
 
-void llvm::X86::getImpliedFeatures(
+void llvm::X86::updateImpliedFeatures(
     StringRef Feature, bool Enabled,
-    SmallVectorImpl<StringRef> &ImpliedFeatures) {
+    StringMap<bool> &Features) {
   auto I = llvm::find_if(
       FeatureInfos, [&](const FeatureInfo &FI) { return FI.Name == Feature; });
   if (I == std::end(FeatureInfos)) {
@@ -572,6 +603,8 @@ void llvm::X86::getImpliedFeatures(
     getImpliedDisabledFeatures(ImpliedBits,
                                std::distance(std::begin(FeatureInfos), I));
 
-  // Convert all the found bits into strings.
-  getFeatureBitsAsStrings(ImpliedBits, ImpliedFeatures);
+  // Update the map entry for all implied features.
+  for (unsigned i = 0; i != CPU_FEATURE_MAX; ++i)
+    if (ImpliedBits[i] && !FeatureInfos[i].Name.empty())
+      Features[FeatureInfos[i].Name] = Enabled;
 }

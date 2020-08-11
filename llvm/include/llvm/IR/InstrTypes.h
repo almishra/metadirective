@@ -758,7 +758,7 @@ public:
     BAD_ICMP_PREDICATE = ICMP_SLE + 1
   };
   using PredicateField =
-      Bitfield::Element<Predicate, 0, 6, LAST_ICMP_PREDICATE>; // Next bit:6
+      Bitfield::Element<Predicate, 0, 6, LAST_ICMP_PREDICATE>;
 
 protected:
   CmpInst(Type *ty, Instruction::OtherOps op, Predicate pred,
@@ -805,7 +805,9 @@ public:
   void setPredicate(Predicate P) { setSubclassData<PredicateField>(P); }
 
   static bool isFPPredicate(Predicate P) {
-    return P >= FIRST_FCMP_PREDICATE && P <= LAST_FCMP_PREDICATE;
+    assert(FIRST_FCMP_PREDICATE == 0 &&
+           "FIRST_FCMP_PREDICATE is required to be 0");
+    return P <= LAST_FCMP_PREDICATE;
   }
 
   static bool isIntPredicate(Predicate P) {
@@ -1096,12 +1098,16 @@ using ConstOperandBundleDef = OperandBundleDefT<const Value *>;
 /// subclass requires. Note that accessing the end of the argument list isn't
 /// as cheap as most other operations on the base class.
 class CallBase : public Instruction {
-  // The first two bits are reserved by CallInst for fast retrieving,
-  using CallInstReservedField = Bitfield::Element<unsigned, 0, 2>; // Next bit:2
-  using CallingConvField = Bitfield::Element<CallingConv::ID, 2, 10,
-                                             CallingConv::MaxID>; // Next bit:12
-
 protected:
+  // The first two bits are reserved by CallInst for fast retrieval,
+  using CallInstReservedField = Bitfield::Element<unsigned, 0, 2>;
+  using CallingConvField =
+      Bitfield::Element<CallingConv::ID, CallInstReservedField::NextBit, 10,
+                        CallingConv::MaxID>;
+  static_assert(
+      Bitfield::areContiguous<CallInstReservedField, CallingConvField>(),
+      "Bitfields must be contiguous");
+
   /// The last operand is the called operand.
   static constexpr int CalledOperandOpEndIdx = -1;
 
@@ -1387,14 +1393,18 @@ public:
   ///
   void setAttributes(AttributeList A) { Attrs = A; }
 
-  /// Determine whether this call has the given attribute.
+  /// Determine whether this call has the given attribute. If it does not
+  /// then determine if the called function has the attribute, but only if
+  /// the attribute is allowed for the call.
   bool hasFnAttr(Attribute::AttrKind Kind) const {
     assert(Kind != Attribute::NoBuiltin &&
            "Use CallBase::isNoBuiltin() to check for Attribute::NoBuiltin");
     return hasFnAttrImpl(Kind);
   }
 
-  /// Determine whether this call has the given attribute.
+  /// Determine whether this call has the given attribute. If it does not
+  /// then determine if the called function has the attribute, but only if
+  /// the attribute is allowed for the call.
   bool hasFnAttr(StringRef Kind) const { return hasFnAttrImpl(Kind); }
 
   /// adds the attribute to the list of attributes.
@@ -1438,6 +1448,12 @@ public:
   void removeAttribute(unsigned i, StringRef Kind) {
     AttributeList PAL = getAttributes();
     PAL = PAL.removeAttribute(getContext(), i, Kind);
+    setAttributes(PAL);
+  }
+
+  void removeAttributes(unsigned i, const AttrBuilder &Attrs) {
+    AttributeList PAL = getAttributes();
+    PAL = PAL.removeAttributes(getContext(), i, Attrs);
     setAttributes(PAL);
   }
 

@@ -2221,8 +2221,7 @@ isValidCandidateForColdCC(Function &F,
     BlockFrequencyInfo &CallerBFI = GetBFI(*CallerFunc);
     if (!isColdCallSite(CB, CallerBFI))
       return false;
-    auto It = std::find(AllCallsCold.begin(), AllCallsCold.end(), CallerFunc);
-    if (It == AllCallsCold.end())
+    if (!llvm::is_contained(AllCallsCold, CallerFunc))
       return false;
   }
   return true;
@@ -2442,7 +2441,7 @@ OptimizeFunctions(Module &M,
     // FIXME: We should also hoist alloca affected by this to the entry
     // block if possible.
     if (F->getAttributes().hasAttrSomewhere(Attribute::InAlloca) &&
-        !F->hasAddressTaken()) {
+        !F->hasAddressTaken() && !hasMustTailCallers(F)) {
       RemoveAttribute(F, Attribute::InAlloca);
       Changed = true;
     }

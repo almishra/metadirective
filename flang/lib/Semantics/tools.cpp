@@ -179,10 +179,21 @@ bool DoesScopeContain(const Scope *maybeAncestor, const Symbol &symbol) {
   return DoesScopeContain(maybeAncestor, symbol.owner());
 }
 
+static const Symbol &FollowHostAssoc(const Symbol &symbol) {
+  for (const Symbol *s{&symbol};;) {
+    const auto *details{s->detailsIf<HostAssocDetails>()};
+    if (!details) {
+      return *s;
+    }
+    s = &details->symbol();
+  }
+}
+
 bool IsHostAssociated(const Symbol &symbol, const Scope &scope) {
   const Scope *subprogram{FindProgramUnitContaining(scope)};
   return subprogram &&
-      DoesScopeContain(FindProgramUnitContaining(symbol), *subprogram);
+      DoesScopeContain(
+          FindProgramUnitContaining(FollowHostAssoc(symbol)), *subprogram);
 }
 
 bool IsInStmtFunction(const Symbol &symbol) {
@@ -1215,13 +1226,6 @@ const Symbol *FindImmediateComponent(const DerivedTypeSpec &type,
     }
   }
   return nullptr;
-}
-
-bool IsFunctionResult(const Symbol &symbol) {
-  return (symbol.has<ObjectEntityDetails>() &&
-             symbol.get<ObjectEntityDetails>().isFuncResult()) ||
-      (symbol.has<ProcEntityDetails>() &&
-          symbol.get<ProcEntityDetails>().isFuncResult());
 }
 
 bool IsFunctionResultWithSameNameAsFunction(const Symbol &symbol) {

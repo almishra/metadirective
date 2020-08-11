@@ -1858,6 +1858,11 @@ bool TargetLowering::SimplifyDemandedBits(
     assert(!Known.hasConflict() && "Bits known to be one AND zero?");
     assert(Known.getBitWidth() == InBits && "Src width has changed?");
     Known = Known.zext(BitWidth);
+
+    // Attempt to avoid multi-use ops if we don't need anything from them.
+    if (SDValue NewSrc = SimplifyMultipleUseDemandedBits(
+            Src, InDemandedBits, InDemandedElts, TLO.DAG, Depth + 1))
+      return TLO.CombineTo(Op, TLO.DAG.getNode(Op.getOpcode(), dl, VT, NewSrc));
     break;
   }
   case ISD::SIGN_EXTEND:
@@ -1906,6 +1911,11 @@ bool TargetLowering::SimplifyDemandedBits(
       if (!TLO.LegalOperations() || isOperationLegal(Opc, VT))
         return TLO.CombineTo(Op, TLO.DAG.getNode(Opc, dl, VT, Src));
     }
+
+    // Attempt to avoid multi-use ops if we don't need anything from them.
+    if (SDValue NewSrc = SimplifyMultipleUseDemandedBits(
+            Src, InDemandedBits, InDemandedElts, TLO.DAG, Depth + 1))
+      return TLO.CombineTo(Op, TLO.DAG.getNode(Op.getOpcode(), dl, VT, NewSrc));
     break;
   }
   case ISD::ANY_EXTEND:
@@ -3891,20 +3901,20 @@ SDValue TargetLowering::SimplifySetCC(EVT VT, SDValue N0, SDValue N1,
     // TODO: Support this for vectors after legalize ops.
     if (!VT.isVector() || DCI.isBeforeLegalizeOps()) {
       // SETUGT X, SINTMAX  -> SETLT X, 0
-      if (Cond == ISD::SETUGT &&
-          C1 == APInt::getSignedMaxValue(OperandBitSize))
+      // SETUGE X, SINTMIN -> SETLT X, 0
+      if ((Cond == ISD::SETUGT && C1.isMaxSignedValue()) ||
+          (Cond == ISD::SETUGE && C1.isMinSignedValue()))
         return DAG.getSetCC(dl, VT, N0,
                             DAG.getConstant(0, dl, N1.getValueType()),
                             ISD::SETLT);
 
       // SETULT X, SINTMIN  -> SETGT X, -1
-      if (Cond == ISD::SETULT &&
-          C1 == APInt::getSignedMinValue(OperandBitSize)) {
-        SDValue ConstMinusOne =
-            DAG.getConstant(APInt::getAllOnesValue(OperandBitSize), dl,
-                            N1.getValueType());
-        return DAG.getSetCC(dl, VT, N0, ConstMinusOne, ISD::SETGT);
-      }
+      // SETULE X, SINTMAX  -> SETGT X, -1
+      if ((Cond == ISD::SETULT && C1.isMinSignedValue()) ||
+          (Cond == ISD::SETULE && C1.isMaxSignedValue()))
+        return DAG.getSetCC(dl, VT, N0,
+                            DAG.getAllOnesConstant(dl, N1.getValueType()),
+                            ISD::SETGT);
     }
   }
 
@@ -4312,8 +4322,8 @@ const char *TargetLowering::LowerXConstraint(EVT ConstraintVT) const {
 }
 
 SDValue TargetLowering::LowerAsmOutputForConstraint(
-    SDValue &Chain, SDValue &Flag, SDLoc DL, const AsmOperandInfo &OpInfo,
-    SelectionDAG &DAG) const {
+    SDValue &Chain, SDValue &Flag, const SDLoc &DL,
+    const AsmOperandInfo &OpInfo, SelectionDAG &DAG) const {
   return SDValue();
 }
 
@@ -5918,7 +5928,7 @@ SDValue TargetLowering::getNegatedExpression(SDValue Op, SelectionDAG &DAG,
 // Legalization Utilities
 //===----------------------------------------------------------------------===//
 
-bool TargetLowering::expandMUL_LOHI(unsigned Opcode, EVT VT, SDLoc dl,
+bool TargetLowering::expandMUL_LOHI(unsigned Opcode, EVT VT, const SDLoc &dl,
                                     SDValue LHS, SDValue RHS,
                                     SmallVectorImpl<SDValue> &Result,
                                     EVT HiLoVT, SelectionDAG &DAG,
@@ -6106,7 +6116,7 @@ bool TargetLowering::expandMUL(SDNode *N, SDValue &Lo, SDValue &Hi, EVT HiLoVT,
                                SDValue LL, SDValue LH, SDValue RL,
                                SDValue RH) const {
   SmallVector<SDValue, 2> Result;
-  bool Ok = expandMUL_LOHI(N->getOpcode(), N->getValueType(0), N,
+  bool Ok = expandMUL_LOHI(N->getOpcode(), N->getValueType(0), SDLoc(N),
                            N->getOperand(0), N->getOperand(1), Result, HiLoVT,
                            DAG, Kind, LL, LH, RL, RH);
   if (Ok) {
@@ -7153,6 +7163,9 @@ TargetLowering::IncrementMemoryAddress(SDValue Addr, SDValue Mask,
   assert(DataVT.getVectorNumElements() == MaskVT.getVectorNumElements() &&
          "Incompatible types of Data and Mask");
   if (IsCompressedMemory) {
+    if (DataVT.isScalableVector())
+      report_fatal_error(
+          "Cannot currently handle compressed memory with scalable vectors");
     // Incrementing the pointer according to number of '1's in the mask.
     EVT MaskIntVT = EVT::getIntegerVT(*DAG.getContext(), MaskVT.getSizeInBits());
     SDValue MaskInIntReg = DAG.getBitcast(MaskIntVT, Mask);
@@ -7168,6 +7181,10 @@ TargetLowering::IncrementMemoryAddress(SDValue Addr, SDValue Mask,
     SDValue Scale = DAG.getConstant(DataVT.getScalarSizeInBits() / 8, DL,
                                     AddrVT);
     Increment = DAG.getNode(ISD::MUL, DL, AddrVT, Increment, Scale);
+  } else if (DataVT.isScalableVector()) {
+    Increment = DAG.getVScale(DL, AddrVT,
+                              APInt(AddrVT.getSizeInBits().getFixedSize(),
+                                    DataVT.getStoreSize().getKnownMinSize()));
   } else
     Increment = DAG.getConstant(DataVT.getStoreSize(), DL, AddrVT);
 
@@ -7324,6 +7341,11 @@ SDValue TargetLowering::expandAddSubSat(SDNode *Node, SelectionDAG &DAG) const {
                      "addition or subtraction node.");
   }
 
+  // FIXME: Should really try to split the vector in case it's legal on a
+  // subvector.
+  if (VT.isVector() && !isOperationLegalOrCustom(ISD::VSELECT, VT))
+    return DAG.UnrollVectorOp(Node);
+
   unsigned BitWidth = LHS.getScalarValueSizeInBits();
   EVT BoolVT = getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), VT);
   SDValue Result = DAG.getNode(OverflowOp, dl, DAG.getVTList(VT, BoolVT),
@@ -7361,6 +7383,41 @@ SDValue TargetLowering::expandAddSubSat(SDNode *Node, SelectionDAG &DAG) const {
     Result = DAG.getSelect(dl, VT, SumNeg, SatMax, SatMin);
     return DAG.getSelect(dl, VT, Overflow, Result, SumDiff);
   }
+}
+
+SDValue TargetLowering::expandShlSat(SDNode *Node, SelectionDAG &DAG) const {
+  unsigned Opcode = Node->getOpcode();
+  bool IsSigned = Opcode == ISD::SSHLSAT;
+  SDValue LHS = Node->getOperand(0);
+  SDValue RHS = Node->getOperand(1);
+  EVT VT = LHS.getValueType();
+  SDLoc dl(Node);
+
+  assert((Node->getOpcode() == ISD::SSHLSAT ||
+          Node->getOpcode() == ISD::USHLSAT) &&
+          "Expected a SHLSAT opcode");
+  assert(VT == RHS.getValueType() && "Expected operands to be the same type");
+  assert(VT.isInteger() && "Expected operands to be integers");
+
+  // If LHS != (LHS << RHS) >> RHS, we have overflow and must saturate.
+
+  unsigned BW = VT.getScalarSizeInBits();
+  SDValue Result = DAG.getNode(ISD::SHL, dl, VT, LHS, RHS);
+  SDValue Orig =
+      DAG.getNode(IsSigned ? ISD::SRA : ISD::SRL, dl, VT, Result, RHS);
+
+  SDValue SatVal;
+  if (IsSigned) {
+    SDValue SatMin = DAG.getConstant(APInt::getSignedMinValue(BW), dl, VT);
+    SDValue SatMax = DAG.getConstant(APInt::getSignedMaxValue(BW), dl, VT);
+    SatVal = DAG.getSelectCC(dl, LHS, DAG.getConstant(0, dl, VT),
+                             SatMin, SatMax, ISD::SETLT);
+  } else {
+    SatVal = DAG.getConstant(APInt::getMaxValue(BW), dl, VT);
+  }
+  Result = DAG.getSelectCC(dl, LHS, Orig, SatVal, Result, ISD::SETNE);
+
+  return Result;
 }
 
 SDValue

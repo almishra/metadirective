@@ -42,6 +42,7 @@
 
 #include "ARM.h"
 #include "ARMSubtarget.h"
+#include "ARMTargetTransformInfo.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -64,16 +65,27 @@ using namespace llvm;
 #define DEBUG_TYPE "mve-tail-predication"
 #define DESC "Transform predicated vector loops to use MVE tail predication"
 
-static cl::opt<bool>
-ForceTailPredication("force-mve-tail-predication", cl::Hidden, cl::init(false),
-                     cl::desc("Force MVE tail-predication even if it might be "
-                              "unsafe (e.g. possible overflow in loop "
-                              "counters)"));
+cl::opt<TailPredication::Mode> EnableTailPredication(
+   "tail-predication", cl::desc("MVE tail-predication options"),
+   cl::init(TailPredication::Disabled),
+   cl::values(clEnumValN(TailPredication::Disabled, "disabled",
+                         "Don't tail-predicate loops"),
+              clEnumValN(TailPredication::EnabledNoReductions,
+                         "enabled-no-reductions",
+                         "Enable tail-predication, but not for reduction loops"),
+              clEnumValN(TailPredication::Enabled,
+                         "enabled",
+                         "Enable tail-predication, including reduction loops"),
+              clEnumValN(TailPredication::ForceEnabledNoReductions,
+                         "force-enabled-no-reductions",
+                         "Enable tail-predication, but not for reduction loops, "
+                         "and force this which might be unsafe"),
+              clEnumValN(TailPredication::ForceEnabled,
+                         "force-enabled",
+                         "Enable tail-predication, including reduction loops, "
+                         "and force this which might be unsafe")));
 
-cl::opt<bool>
-DisableTailPredication("disable-mve-tail-predication", cl::Hidden,
-                       cl::init(true),
-                       cl::desc("Disable MVE Tail Predication"));
+
 namespace {
 
 class MVETailPredication : public LoopPass {
@@ -146,7 +158,7 @@ static bool IsMasked(Instruction *I) {
 }
 
 bool MVETailPredication::runOnLoop(Loop *L, LPPassManager&) {
-  if (skipLoop(L) || DisableTailPredication)
+  if (skipLoop(L) || !EnableTailPredication)
     return false;
 
   MaskedInsts.clear();
@@ -242,11 +254,12 @@ bool MVETailPredication::IsPredicatedVectorLoop() {
       switch (Int->getIntrinsicID()) {
       case Intrinsic::get_active_lane_mask:
         ActiveLaneMask = true;
-        LLVM_FALLTHROUGH;
+        continue;
       case Intrinsic::sadd_sat:
       case Intrinsic::uadd_sat:
       case Intrinsic::ssub_sat:
       case Intrinsic::usub_sat:
+      case Intrinsic::experimental_vector_reduce_add:
         continue;
       case Intrinsic::fma:
       case Intrinsic::trunc:
@@ -257,7 +270,7 @@ bool MVETailPredication::IsPredicatedVectorLoop() {
       case Intrinsic::fabs:
         if (ST->hasMVEFloatOps())
           continue;
-        LLVM_FALLTHROUGH;
+        break;
       default:
         break;
       }
@@ -346,6 +359,9 @@ static void Cleanup(SetVector<Instruction*> &MaybeDead, Loop *L) {
 //    vector width.
 bool MVETailPredication::IsSafeActiveMask(IntrinsicInst *ActiveLaneMask,
     Value *TripCount, FixedVectorType *VecTy) {
+  bool ForceTailPredication =
+    EnableTailPredication == TailPredication::ForceEnabledNoReductions ||
+    EnableTailPredication == TailPredication::ForceEnabled;
   // 1) Test whether entry to the loop is protected by a conditional
   // BTC + 1 < 0. In other words, if the scalar trip count overflows,
   // becomes negative, we shouldn't enter the loop and creating

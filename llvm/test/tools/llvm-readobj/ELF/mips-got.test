@@ -484,3 +484,98 @@
 # GNU-GOT-STATIC-NEXT:   00410118 -32744(gp) 00400000
 # GNU-GOT-STATIC-NEXT:   0041011c -32740(gp) 00400100
 # GNU-GOT-STATIC-NEXT:   00410120 -32736(gp) 00400104
+
+## Check we report errors when dynamic tags, needed for dumping GOT, are missing.
+
+# RUN: yaml2obj --docnum=1 -DTAG1=DT_MIPS_LOCAL_GOTNO -DTAG2=DT_MIPS_GOTSYM %s -o %t.err1.o
+# RUN: not llvm-readobj -A %t.err1.o 2>&1 | FileCheck %s -DFILE=%t.err1.o -check-prefix ERR1
+
+# ERR1: error: '[[FILE]]': cannot find PLTGOT dynamic tag
+
+# RUN: yaml2obj --docnum=1 -DTAG1=DT_PLTGOT -DTAG2=DT_MIPS_GOTSYM %s -o %t.err2.o
+# RUN: not llvm-readobj -A %t.err2.o 2>&1 | FileCheck %s -DFILE=%t.err2.o -check-prefix ERR2
+
+# ERR2: error: '[[FILE]]': cannot find MIPS_LOCAL_GOTNO dynamic tag
+
+# RUN: yaml2obj --docnum=1 -DTAG1=DT_PLTGOT -DTAG2=DT_MIPS_LOCAL_GOTNO %s -o %t.err3.o
+# RUN: not llvm-readobj -A %t.err3.o 2>&1 | FileCheck %s -DFILE=%t.err3.o -check-prefix ERR3
+
+# ERR3: error: '[[FILE]]': cannot find MIPS_GOTSYM dynamic tag
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_EXEC
+  Machine: EM_MIPS
+Sections:
+  - Name: .dynamic
+    Type: SHT_DYNAMIC
+    Entries:
+      - Tag:   [[TAG1]]
+        Value: 0
+      - Tag:   [[TAG2]]
+        Value: 0
+      - Tag:   DT_NULL
+        Value: 0
+DynamicSymbols: []
+
+# RUN: yaml2obj --docnum=2 -DVAL1=0xffff %s -o %t.err4.o
+# RUN: not llvm-readobj -A %t.err4.o 2>&1 | FileCheck %s -DFILE=%t.err4.o -check-prefix=ERR4
+
+# ERR4: error: '[[FILE]]': DT_MIPS_GOTSYM value (65535) exceeds the number of dynamic symbols (1)
+
+# RUN: yaml2obj --docnum=2 -DVAL2=0xffff %s -o %t.err5.o
+# RUN: not llvm-readobj -A %t.err5.o 2>&1 | FileCheck %s -DFILE=%t.err5.o -check-prefix=ERR5
+
+# ERR5: error: '[[FILE]]': there is no non-empty GOT section at 0xffff
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_EXEC
+  Machine: EM_MIPS
+Sections:
+  - Name: .dynamic
+    Type: SHT_DYNAMIC
+    Entries:
+      - Tag:   DT_MIPS_LOCAL_GOTNO
+        Value: 0
+      - Tag:   DT_MIPS_GOTSYM
+        Value: [[VAL1=0]]
+      - Tag:   DT_PLTGOT
+        Value: [[VAL2=0]]
+DynamicSymbols: []
+
+## Check that we do not report a warning about the .got section when we are able to locate it by name.
+# RUN: yaml2obj --docnum=3 -DNAME=0xffff %s -o %t.err6.o
+# RUN: llvm-readobj -A %t.err6.o 2>&1 | \
+# RUN:   FileCheck %s -DFILE=%t.err6.o -check-prefix=NAME-ERR-FOUND --implicit-check-not=warning:
+# RUN: llvm-readelf -A %t.err6.o 2>&1 | \
+# RUN:   FileCheck %s -DFILE=%t.err6.o -check-prefix=NAME-ERR-FOUND --implicit-check-not=warning:
+
+# NAME-ERR-FOUND:      warning: '[[FILE]]': unable to read the name of SHT_PROGBITS section with index 1: a section [index 1] has an invalid sh_name (0xffff) offset which goes past the end of the section name string table
+# NAME-ERR-FOUND-NEXT: warning: '[[FILE]]': unable to read the name of SHT_PROGBITS section with index 3: a section [index 3] has an invalid sh_name (0xffff) offset which goes past the end of the section name string table
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_MIPS
+Sections:
+  - Type:   SHT_PROGBITS
+    ShName: [[NAME=<none>]]
+  - Name:   .got
+    Type:   SHT_PROGBITS
+    ShName: [[GOTNAME=<none>]]
+  - Type:   SHT_PROGBITS
+    ShName: [[NAME=<none>]]
+
+## Check we report a warning when we are unable to find the .got section due to an error.
+# RUN: yaml2obj --docnum=3 -DGOTNAME=0xffff %s -o %t.err7.o
+# RUN: llvm-readelf -A %t.err7.o 2>&1 | FileCheck %s -DFILE=%t.err7.o --check-prefix=NAME-ERR-NOTFOUND --implicit-check-not=warning:
+# RUN: llvm-readobj -A %t.err7.o 2>&1 | FileCheck %s -DFILE=%t.err7.o --check-prefix=NAME-ERR-NOTFOUND --implicit-check-not=warning:
+
+# NAME-ERR-NOTFOUND:      warning: '[[FILE]]': unable to read the name of SHT_PROGBITS section with index 2: a section [index 2] has an invalid sh_name (0xffff) offset which goes past the end of the section name string table
