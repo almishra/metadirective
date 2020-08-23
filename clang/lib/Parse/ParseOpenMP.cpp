@@ -2093,20 +2093,6 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
   case OMPD_metadirective: {
     ConsumeToken();
 
-    /* Get Stmt and revert back */
-    TentativeParsingAction TPA1(*this);
-    while (Tok.isNot(tok::annot_pragma_openmp_end)) {
-      ConsumeAnyToken();
-    }
-    ConsumeAnnotationToken();
-    ParseScope InnerStmtScope(this, Scope::DeclScope,
-                              getLangOpts().C99 || getLangOpts().CPlusPlus,
-                              Tok.is(tok::l_brace));
-    StmtResult AStmt = ParseStatement();
-    InnerStmtScope.Exit();
-    TPA1.Revert();
-    /*End Get Stmt*/
-
     ParseScope OMPDirectiveScope(this, ScopeFlags);
     Actions.StartOpenMPDSABlock(DKind, DirName, Actions.getCurScope(), Loc);
 
@@ -2135,18 +2121,18 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
     // Consume final annot_pragma_openmp_end.
     ConsumeAnnotationToken();
 
+    // The body is a block scope like in Lambdas and Blocks.
+    Actions.ActOnOpenMPRegionStart(DKind, getCurScope());
+    ParsingOpenMPDirectiveRAII NormalScope(*this, /*Value=*/false);
+    StmtResult AStmt = ParseStatement();
+    StmtResult AssociatedStmt = (Sema::CompoundScopeRAII(Actions), AStmt);
+    AssociatedStmt = Actions.ActOnOpenMPRegionEnd(AssociatedStmt, Clauses);
+
     for (auto i = Clauses.begin(); i < Clauses.end(); i++) {
       OMPWhenClause *WhenClause = dyn_cast<OMPWhenClause>(*i);
       if (WhenClause->getDKind() == OMPD_unknown)
         WhenClause->setInnerStmt(AStmt.get());
     }
-
-    // The body is a block scope like in Lambdas and Blocks.
-    Actions.ActOnOpenMPRegionStart(DKind, getCurScope());
-    ParsingOpenMPDirectiveRAII NormalScope(*this, /*Value=*/false);
-    StmtResult AssociatedStmt =
-        (Sema::CompoundScopeRAII(Actions), ParseStatement());
-    AssociatedStmt = Actions.ActOnOpenMPRegionEnd(AssociatedStmt, Clauses);
 
     Directive = Actions.ActOnOpenMPExecutableDirective(
         DKind, DirName, CancelRegion, Clauses, AssociatedStmt.get(), Loc,
