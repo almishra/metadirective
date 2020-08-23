@@ -1502,12 +1502,16 @@ OMPAffinityClause *OMPAffinityClause::CreateEmpty(const ASTContext &C,
 //===----------------------------------------------------------------------===//
 
 void OMPClausePrinter::VisitOMPWhenClause(OMPWhenClause *Node) {
-  if (Node->getExpr() != NULL) {
-    OS << "when(";
-    Node->getExpr()->printPretty(OS, nullptr, Policy, 0);
-    OS << ": ";
-  } else {
-    OS << "default(";
+  for (const OMPTraitSet &Set : Node->getTI().Sets) {
+    for (const OMPTraitSelector &Selector : Set.Selectors) {
+      if (Selector.Kind == llvm::omp::TraitSelector::user_condition) {
+        OS << "when(";
+        Node->getTI().print(OS, Policy);
+        OS << ":";
+      } else {
+        OS << "default(";
+      }
+    }
   }
 }
 

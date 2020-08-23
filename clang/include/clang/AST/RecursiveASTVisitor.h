@@ -3027,7 +3027,13 @@ RecursiveASTVisitor<Derived>::VisitOMPCollapseClause(OMPCollapseClause *C) {
 
 template <typename Derived>
 bool RecursiveASTVisitor<Derived>::VisitOMPWhenClause(OMPWhenClause *C) {
-  TRY_TO(TraverseStmt(C->getExpr()));
+  for (const OMPTraitSet &Set : C->getTI().Sets) {
+    for (const OMPTraitSelector &Selector : Set.Selectors) {
+      if (Selector.Kind == llvm::omp::TraitSelector::user_condition &&
+          Selector.ScoreOrCondition)
+        TRY_TO(TraverseStmt(Selector.ScoreOrCondition));
+    }
+  }
   return true;
 }
 

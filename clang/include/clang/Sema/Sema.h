@@ -10635,7 +10635,7 @@ public:
                                      SourceLocation LParenLoc,
                                      SourceLocation EndLoc);
   /// Called on well-formed 'when' clause.
-  OMPClause *ActOnOpenMPWhenClause(Expr *Expr, OpenMPDirectiveKind DKind,
+  OMPClause *ActOnOpenMPWhenClause(OMPTraitInfo &TI, OpenMPDirectiveKind DKind,
                                    ArrayRef<OMPClause *> Clauses, Stmt *AStmt,
                                    SourceLocation StartLoc,
                                    SourceLocation LParenLoc,

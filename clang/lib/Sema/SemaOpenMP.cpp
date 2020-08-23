@@ -13084,13 +13084,13 @@ getListOfPossibleValues(OpenMPClauseKind K, unsigned First, unsigned Last,
   return std::string(Out.str());
 }
 
-OMPClause *Sema::ActOnOpenMPWhenClause(Expr *Expr, OpenMPDirectiveKind DKind,
+OMPClause *Sema::ActOnOpenMPWhenClause(OMPTraitInfo &TI, OpenMPDirectiveKind DKind,
                                        ArrayRef<OMPClause *> Clauses,
                                        Stmt *AStmt, SourceLocation StartLoc,
                                        SourceLocation LParenLoc,
                                        SourceLocation EndLoc) {
   return new (Context)
-      OMPWhenClause(Expr, DKind, Clauses, AStmt, StartLoc, LParenLoc, EndLoc);
+      OMPWhenClause(TI, DKind, Clauses, AStmt, StartLoc, LParenLoc, EndLoc);
 }
 
 OMPClause *Sema::ActOnOpenMPDefaultClause(DefaultKind Kind,

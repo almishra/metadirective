@@ -860,86 +860,6 @@ public:
   }
 };
 
-/// This represents 'when' clause in the '#pragma omp ...' directive
-///
-/// \code
-/// #pragma omp metadirective when(user={condition(N<10)}: parallel)
-/// \endcode
-/// In this example directive '#pragma omp metadirective' has simple 'when'
-/// clause with user defined condition.
-class OMPWhenClause final : public OMPClause {
-  friend class OMPClauseReader;
-
-  Expr *CondExpr;
-  OpenMPDirectiveKind DKind;
-  ArrayRef<OMPClause *> Clauses;
-  Stmt *InnerStmt;
-
-  /// Location of '('.
-  SourceLocation LParenLoc;
-
-  void setExpr(Expr *E) { CondExpr = E; }
-
-public:
-  /// Build 'when' clause with argument \a A ('none' or 'shared').
-  ///
-  /// \param A Argument of the clause ('none' or 'shared').
-  /// \param ALoc Starting location of the argument.
-  /// \param StartLoc Starting location of the clause.
-  /// \param LParenLoc Location of '('.
-  /// \param EndLoc Ending location of the clause.
-  OMPWhenClause(Expr *expr, OpenMPDirectiveKind dKind,
-                ArrayRef<OMPClause *> clauses, Stmt *AStmt,
-                SourceLocation StartLoc, SourceLocation LParenLoc,
-                SourceLocation EndLoc)
-      : OMPClause(llvm::omp::OMPC_when, StartLoc, EndLoc), CondExpr(expr),
-        DKind(dKind), Clauses(clauses), InnerStmt(AStmt), LParenLoc(LParenLoc) {
-  }
-
-  /// Build an empty clause.
-  OMPWhenClause()
-      : OMPClause(llvm::omp::OMPC_when, SourceLocation(), SourceLocation()) {}
-
-  /// Sets the location of '('.
-  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
-
-  /// Returns the location of '('.
-  SourceLocation getLParenLoc() const { return LParenLoc; }
-
-  /// Returns the associated condition expression
-  Expr *getExpr() const { return CondExpr; }
-
-  /// Returns the directive variant kind
-  OpenMPDirectiveKind getDKind() { return DKind; }
-
-  /// Returns the clauses associated with the directive variants
-  ArrayRef<OMPClause *> getClauses() { return Clauses; }
-
-  /// Set the inner statement
-  void setInnerStmt(Stmt *s) { InnerStmt = s; }
-
-  /// Returns the inner statement
-  Stmt *getInnerStmt() { return InnerStmt; }
-
-  child_range children() {
-    return child_range(child_iterator(), child_iterator());
-  }
-
-  const_child_range children() const {
-    return const_child_range(const_child_iterator(), const_child_iterator());
-  }
-  child_range used_children() {
-    return child_range(child_iterator(), child_iterator());
-  }
-  const_child_range used_children() const {
-    return const_child_range(const_child_iterator(), const_child_iterator());
-  }
-
-  static bool classof(const OMPClause *T) {
-    return T->getClauseKind() == llvm::omp::OMPC_when;
-  }
-};
-
 /// This represents 'default' clause in the '#pragma omp ...' directive.
 ///
 /// \code
@@ -7941,6 +7861,95 @@ public:
 };
 llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const OMPTraitInfo &TI);
 llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const OMPTraitInfo *TI);
+
+/// This represents 'when' clause in the '#pragma omp ...' directive
+///
+/// \code
+/// #pragma omp metadirective when(user={condition(N<10)}: parallel)
+/// \endcode
+/// In this example directive '#pragma omp metadirective' has simple 'when'
+/// clause with user defined condition.
+class OMPWhenClause final : public OMPClause {
+  friend class OMPClauseReader;
+
+  Expr *CondExpr;
+  OMPTraitInfo *TI;
+  OpenMPDirectiveKind DKind;
+  ArrayRef<OMPClause *> Clauses;
+  Stmt *InnerStmt;
+
+  /// Location of '('.
+  SourceLocation LParenLoc;
+
+  void setExpr(Expr *E) { CondExpr = E; }
+
+public:
+  /// Build 'when' clause with argument \a A ('none' or 'shared').
+  ///
+  /// \param A Argument of the clause ('none' or 'shared').
+  /// \param ALoc Starting location of the argument.
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  OMPWhenClause(OMPTraitInfo &T, OpenMPDirectiveKind dKind,
+                ArrayRef<OMPClause *> clauses, Stmt *AStmt,
+                SourceLocation StartLoc, SourceLocation LParenLoc,
+                SourceLocation EndLoc)
+      : OMPClause(llvm::omp::OMPC_when, StartLoc, EndLoc), TI(&T),
+        DKind(dKind), Clauses(clauses), InnerStmt(AStmt), LParenLoc(LParenLoc) {
+    for (const OMPTraitSet &Set : TI->Sets)
+      for (const OMPTraitSelector &Selector : Set.Selectors)
+        if (Selector.Kind == llvm::omp::TraitSelector::user_condition &&
+            Selector.ScoreOrCondition)
+          setExpr(Selector.ScoreOrCondition);
+  }
+
+  /// Build an empty clause.
+  OMPWhenClause()
+      : OMPClause(llvm::omp::OMPC_when, SourceLocation(), SourceLocation()) {}
+
+  /// Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+
+  /// Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  /// Returns the associated condition expression
+  Expr *getExpr() const { return CondExpr; }
+
+  /// Returns the directive variant kind
+  OpenMPDirectiveKind getDKind() { return DKind; }
+
+  /// Returns the clauses associated with the directive variants
+  ArrayRef<OMPClause *> getClauses() { return Clauses; }
+
+  /// Returns the OMPTraitInfo
+  OMPTraitInfo& getTI() { return *TI; }
+
+  /// Set the inner statement
+  void setInnerStmt(Stmt *s) { InnerStmt = s; }
+
+  /// Returns the inner statement
+  Stmt *getInnerStmt() { return InnerStmt; }
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+
+  const_child_range children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+  child_range used_children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+  const_child_range used_children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == llvm::omp::OMPC_when;
+  }
+};
 
 /// Clang specific specialization of the OMPContext to lookup target features.
 struct TargetOMPContext final : public llvm::omp::OMPContext {
