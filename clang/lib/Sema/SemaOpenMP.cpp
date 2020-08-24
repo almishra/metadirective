@@ -6289,9 +6289,13 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
 
   for (auto i = Clauses.rbegin(); i < Clauses.rend(); i++) {
     OMPWhenClause *WhenClause = dyn_cast<OMPWhenClause>(*i);
-    Expr *WhenCondExpr = WhenClause->getExpr();
+    Expr *WhenCondExpr = NULL;// = WhenClause->getExpr();
     Stmt *ThenStmt = NULL;
     Stmt *WhenAStmt = WhenClause->getInnerStmt();
+
+    OMPTraitInfo TI = WhenClause->getTI();
+    TI.print(llvm::errs(), getPrintingPolicy());
+    llvm::errs() << "\n";
 
     OpenMPDirectiveKind DKind = WhenClause->getDKind();
     DeclarationNameInfo DirName;
@@ -6305,6 +6309,40 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
               .get();
     }
     EndOpenMPDSABlock(ThenStmt);
+    for (const OMPTraitSet &Set : TI.Sets) {
+      for (const OMPTraitSelector &Selector : Set.Selectors) {
+        switch(Selector.Kind) {
+          case TraitSelector::device_arch: {
+            bool archMatch = false;
+            for (const OMPTraitProperty &Property : Selector.Properties) {
+              for(auto &T : getLangOpts().OMPTargetTriples) {
+                if(T.getArchName() == Property.RawString) {
+                  archMatch = true;
+                  break;
+                }
+              }
+              if(archMatch) break;
+            }
+            // Create a true/false boolean expression and assign to WhenCondExpr
+            CXXBoolLiteralExpr C(archMatch, Context.BoolTy, StartLoc);
+            WhenCondExpr = dyn_cast<Expr>(&C);
+            break;
+          }
+          case TraitSelector::user_condition: {
+            assert(Selector.ScoreOrCondition && 
+                   "Ill-formed user condition, expected condition expression!");
+
+            WhenCondExpr = Selector.ScoreOrCondition;
+            break;
+          }
+          case TraitSelector::device_isa:
+          case TraitSelector::device_kind:
+          case TraitSelector::implementation_vendor:
+          case TraitSelector::implementation_extension:
+          default: break;
+        }
+      }
+    }
 
     if (WhenCondExpr == NULL) {
       if (ElseStmt != NULL) {
@@ -6329,6 +6367,7 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
     ElseStmt = IfStmt.get();
   }
 
+  //IfStmt.get()->dump();
   return OMPMetaDirective::Create(Context, StartLoc, EndLoc, Clauses, AStmt,
                                   IfStmt.get());
 }
