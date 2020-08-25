@@ -6192,7 +6192,6 @@ void OMPClauseWriter::VisitOMPDetachClause(OMPDetachClause *C) {
 }
 
 void OMPClauseWriter::VisitOMPWhenClause(OMPWhenClause *C) {
-  Record.AddStmt(C->getExpr());
   Record.AddSourceLocation(C->getLParenLoc());
 }
 

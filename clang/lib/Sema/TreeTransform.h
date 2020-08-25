@@ -1638,12 +1638,11 @@ public:
   /// By default, performs semantic analysis to build the new OpenMP clause.
   /// Subclasses may override this routine to provide different behavior.
   OMPClause *RebuildOMPWhenClause(OMPTraitInfo &TI, OpenMPDirectiveKind DKind,
-                                  ArrayRef<OMPClause *> Clauses, Stmt *AStmt,
-                                  SourceLocation StartLoc,
+                                  Stmt* Directive, SourceLocation StartLoc,
                                   SourceLocation LParenLoc,
                                   SourceLocation EndLoc) {
-    return getSema().ActOnOpenMPWhenClause(TI, DKind, Clauses, AStmt,
-                                           StartLoc, LParenLoc, EndLoc);
+    return getSema().ActOnOpenMPWhenClause(TI, DKind, Directive, StartLoc, 
+                                           LParenLoc, EndLoc);
   }
 
   /// Build a new OpenMP 'default' clause.
@@ -9070,12 +9069,9 @@ TreeTransform<Derived>::TransformOMPCollapseClause(OMPCollapseClause *C) {
 
 template <typename Derived>
 OMPClause *TreeTransform<Derived>::TransformOMPWhenClause(OMPWhenClause *C) {
-  ExprResult E = getDerived().TransformExpr(C->getExpr());
-  if (E.isInvalid())
-    return nullptr;
   return getDerived().RebuildOMPWhenClause(
-      C->getTI(), C->getDKind(), C->getClauses(), C->getInnerStmt(),
-      C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc());
+      C->getTI(), C->getDKind(), C->getDirective(), C->getBeginLoc(),
+      C->getLParenLoc(), C->getEndLoc());
 }
 
 template <typename Derived>

@@ -12055,7 +12055,6 @@ void OMPClauseReader::VisitOMPCollapseClause(OMPCollapseClause *C) {
 }
 
 void OMPClauseReader::VisitOMPWhenClause(OMPWhenClause *C) {
-  C->setExpr(Record.readSubExpr());
   C->setLParenLoc(Record.readSourceLocation());
 }
 

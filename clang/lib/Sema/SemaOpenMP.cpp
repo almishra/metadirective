@@ -6289,26 +6289,17 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
 
   for (auto i = Clauses.rbegin(); i < Clauses.rend(); i++) {
     OMPWhenClause *WhenClause = dyn_cast<OMPWhenClause>(*i);
-    Expr *WhenCondExpr = NULL;// = WhenClause->getExpr();
+    Expr *WhenCondExpr = NULL;
     Stmt *ThenStmt = NULL;
-    Stmt *WhenAStmt = WhenClause->getInnerStmt();
 
     OMPTraitInfo TI = WhenClause->getTI();
-    TI.print(llvm::errs(), getPrintingPolicy());
-    llvm::errs() << "\n";
 
     OpenMPDirectiveKind DKind = WhenClause->getDKind();
     DeclarationNameInfo DirName;
-    ArrayRef<OMPClause *> clauses = WhenClause->getClauses();
 
-    StartOpenMPDSABlock(DKind, DirName, getCurScope(), StartLoc);
-    if (DKind != OMPD_unknown) {
-      ThenStmt =
-          ActOnOpenMPExecutableDirective(DKind, DirName, OMPD_unknown, clauses,
-                                         WhenAStmt, StartLoc, EndLoc)
-              .get();
-    }
-    EndOpenMPDSABlock(ThenStmt);
+    if (DKind != OMPD_unknown)
+      ThenStmt = WhenClause->getDirective();
+
     for (const OMPTraitSet &Set : TI.Sets) {
       for (const OMPTraitSelector &Selector : Set.Selectors) {
         switch(Selector.Kind) {
@@ -6350,7 +6341,8 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
         return StmtError();
       }
       if (DKind == OMPD_unknown)
-        ElseStmt = WhenClause->getInnerStmt();
+        ElseStmt = CS->getCapturedDecl()->getBody();
+        //ElseStmt = WhenClause->getInnerStmt();
       else
         ElseStmt = ThenStmt;
       continue;
@@ -6367,7 +6359,6 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
     ElseStmt = IfStmt.get();
   }
 
-  //IfStmt.get()->dump();
   return OMPMetaDirective::Create(Context, StartLoc, EndLoc, Clauses, AStmt,
                                   IfStmt.get());
 }
@@ -13123,13 +13114,14 @@ getListOfPossibleValues(OpenMPClauseKind K, unsigned First, unsigned Last,
   return std::string(Out.str());
 }
 
-OMPClause *Sema::ActOnOpenMPWhenClause(OMPTraitInfo &TI, OpenMPDirectiveKind DKind,
-                                       ArrayRef<OMPClause *> Clauses,
-                                       Stmt *AStmt, SourceLocation StartLoc,
+OMPClause *Sema::ActOnOpenMPWhenClause(OMPTraitInfo &TI,
+                                       OpenMPDirectiveKind DKind,
+                                       StmtResult Directive,
+                                       SourceLocation StartLoc,
                                        SourceLocation LParenLoc,
                                        SourceLocation EndLoc) {
   return new (Context)
-      OMPWhenClause(TI, DKind, Clauses, AStmt, StartLoc, LParenLoc, EndLoc);
+      OMPWhenClause(TI, DKind, Directive.get(), StartLoc, LParenLoc, EndLoc);
 }
 
 OMPClause *Sema::ActOnOpenMPDefaultClause(DefaultKind Kind,

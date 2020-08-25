@@ -2214,7 +2214,7 @@ void OMPClauseEnqueue::VisitOMPCollapseClause(const OMPCollapseClause *C) {
 }
 
 void OMPClauseEnqueue::VisitOMPWhenClause(const OMPWhenClause *C) {
-  Visitor->AddStmt(C->getExpr());
+  Visitor->AddStmt(C->getDirective());
 }
 
 void OMPClauseEnqueue::VisitOMPDefaultClause(const OMPDefaultClause *C) {}

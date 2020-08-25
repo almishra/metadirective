@@ -2128,12 +2128,6 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
     StmtResult AssociatedStmt = (Sema::CompoundScopeRAII(Actions), AStmt);
     AssociatedStmt = Actions.ActOnOpenMPRegionEnd(AssociatedStmt, Clauses);
 
-    for (auto i = Clauses.begin(); i < Clauses.end(); i++) {
-      OMPWhenClause *WhenClause = dyn_cast<OMPWhenClause>(*i);
-      if (WhenClause->getDKind() == OMPD_unknown)
-        WhenClause->setInnerStmt(AStmt.get());
-    }
-
     Directive = Actions.ActOnOpenMPExecutableDirective(
         DKind, DirName, CancelRegion, Clauses, AssociatedStmt.get(), Loc,
         EndLoc);
@@ -2575,8 +2569,6 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
                                tok::annot_pragma_openmp_end);
     if (T.expectAndConsume(diag::err_expected_lparen_after,
                            getOpenMPClauseName(CKind).data()))
-      // if (T.expectAndConsume(diag::err_expected_lparen_after,
-      // ClauseName.data()))
       return nullptr;
 
     OMPTraitInfo &TI = Actions.getASTContext().getNewOMPTraitInfo();
@@ -2598,6 +2590,7 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
     SmallVector<OMPClause *, 5> Clauses;
     StmtResult AssociatedStmt;
 
+    StmtResult Directive;
     if (Tok.isNot(tok::r_paren)) {
       ParsingOpenMPDirectiveRAII DirScope(*this);
       ParenBraceBracketBalancer BalancerRAIIObj(*this);
@@ -2657,9 +2650,9 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
       AssociatedStmt = (Sema::CompoundScopeRAII(Actions), AStmt);
       AssociatedStmt = Actions.ActOnOpenMPRegionEnd(AssociatedStmt, Clauses);
 
-      StmtResult Directive = Actions.ActOnOpenMPExecutableDirective(DirKind,
-          DirName, OMPD_unknown, llvm::makeArrayRef(Clauses),
-          AssociatedStmt.get(), Loc, Tok.getLocation());
+      Directive = Actions.ActOnOpenMPExecutableDirective(DirKind, DirName,
+          OMPD_unknown, llvm::makeArrayRef(Clauses), AssociatedStmt.get(),
+          Loc, Tok.getLocation());
 
       Actions.EndOpenMPDSABlock(Directive.get());
       OMPDirectiveScope.Exit();
@@ -2671,10 +2664,8 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
     if (WrongDirective)
       return nullptr;
 
-    Clause = Actions.ActOnOpenMPWhenClause(TI, DirKind,
-                                           llvm::makeArrayRef(Clauses),
-                                           AssociatedStmt.get(), Loc, DelimLoc,
-                                           Tok.getLocation());
+    Clause = Actions.ActOnOpenMPWhenClause(TI, DirKind, Directive, Loc,
+                                           DelimLoc, Tok.getLocation());
   } else {
     ErrorFound = false;
     Diag(Tok, diag::err_omp_unexpected_clause)

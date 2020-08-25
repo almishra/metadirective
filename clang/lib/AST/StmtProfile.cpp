@@ -477,8 +477,8 @@ void OMPClauseProfiler::VisitOMPDetachClause(const OMPDetachClause *C) {
 }
 
 void OMPClauseProfiler::VisitOMPWhenClause(const OMPWhenClause *C) {
-  if (C->getExpr())
-    Profiler->VisitStmt(C->getExpr());
+  if (C->getDirective())
+    Profiler->VisitStmt(C->getDirective());
 }
 
 void OMPClauseProfiler::VisitOMPDefaultClause(const OMPDefaultClause *C) { }

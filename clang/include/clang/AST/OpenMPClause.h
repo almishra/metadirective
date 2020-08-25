@@ -7872,16 +7872,12 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const OMPTraitInfo *TI);
 class OMPWhenClause final : public OMPClause {
   friend class OMPClauseReader;
 
-  Expr *CondExpr;
   OMPTraitInfo *TI;
   OpenMPDirectiveKind DKind;
-  ArrayRef<OMPClause *> Clauses;
-  Stmt *InnerStmt;
+  Stmt *Directive;
 
   /// Location of '('.
   SourceLocation LParenLoc;
-
-  void setExpr(Expr *E) { CondExpr = E; }
 
 public:
   /// Build 'when' clause with argument \a A ('none' or 'shared').
@@ -7891,17 +7887,11 @@ public:
   /// \param StartLoc Starting location of the clause.
   /// \param LParenLoc Location of '('.
   /// \param EndLoc Ending location of the clause.
-  OMPWhenClause(OMPTraitInfo &T, OpenMPDirectiveKind dKind,
-                ArrayRef<OMPClause *> clauses, Stmt *AStmt,
+  OMPWhenClause(OMPTraitInfo &T, OpenMPDirectiveKind dKind, Stmt* D,
                 SourceLocation StartLoc, SourceLocation LParenLoc,
                 SourceLocation EndLoc)
-      : OMPClause(llvm::omp::OMPC_when, StartLoc, EndLoc), TI(&T),
-        DKind(dKind), Clauses(clauses), InnerStmt(AStmt), LParenLoc(LParenLoc) {
-    for (const OMPTraitSet &Set : TI->Sets)
-      for (const OMPTraitSelector &Selector : Set.Selectors)
-        if (Selector.Kind == llvm::omp::TraitSelector::user_condition &&
-            Selector.ScoreOrCondition)
-          setExpr(Selector.ScoreOrCondition);
+      : OMPClause(llvm::omp::OMPC_when, StartLoc, EndLoc), TI(&T), DKind(dKind),
+        Directive(D), LParenLoc(LParenLoc) {
   }
 
   /// Build an empty clause.
@@ -7914,23 +7904,13 @@ public:
   /// Returns the location of '('.
   SourceLocation getLParenLoc() const { return LParenLoc; }
 
-  /// Returns the associated condition expression
-  Expr *getExpr() const { return CondExpr; }
-
   /// Returns the directive variant kind
   OpenMPDirectiveKind getDKind() { return DKind; }
 
-  /// Returns the clauses associated with the directive variants
-  ArrayRef<OMPClause *> getClauses() { return Clauses; }
+  Stmt *getDirective() const { return Directive; }
 
   /// Returns the OMPTraitInfo
   OMPTraitInfo& getTI() { return *TI; }
-
-  /// Set the inner statement
-  void setInnerStmt(Stmt *s) { InnerStmt = s; }
-
-  /// Returns the inner statement
-  Stmt *getInnerStmt() { return InnerStmt; }
 
   child_range children() {
     return child_range(child_iterator(), child_iterator());
