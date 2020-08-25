@@ -6296,9 +6296,9 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
 
     OpenMPDirectiveKind DKind = WhenClause->getDKind();
     DeclarationNameInfo DirName;
-
     if (DKind != OMPD_unknown)
-      ThenStmt = WhenClause->getDirective();
+      ThenStmt = CompoundStmt::Create(Context, {WhenClause->getDirective()},
+                                      SourceLocation(), SourceLocation());
 
     for (const OMPTraitSet &Set : TI.Sets) {
       for (const OMPTraitSelector &Selector : Set.Selectors) {
@@ -6315,8 +6315,10 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
               if(archMatch) break;
             }
             // Create a true/false boolean expression and assign to WhenCondExpr
-            CXXBoolLiteralExpr C(archMatch, Context.BoolTy, StartLoc);
-            WhenCondExpr = dyn_cast<Expr>(&C);
+            auto *C = new (Context) CXXBoolLiteralExpr(archMatch,
+                                                       Context.BoolTy,
+                                                       StartLoc);
+            WhenCondExpr = dyn_cast<Expr>(C);
             break;
           }
           case TraitSelector::user_condition: {
@@ -6341,8 +6343,8 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
         return StmtError();
       }
       if (DKind == OMPD_unknown)
-        ElseStmt = CS->getCapturedDecl()->getBody();
-        //ElseStmt = WhenClause->getInnerStmt();
+        ElseStmt = CompoundStmt::Create(Context, {CS->getCapturedStmt()},
+                                        SourceLocation(), SourceLocation());
       else
         ElseStmt = ThenStmt;
       continue;
