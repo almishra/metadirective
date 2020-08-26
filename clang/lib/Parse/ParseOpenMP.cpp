@@ -2589,8 +2589,8 @@ OMPClause *Parser::ParseOpenMPMetaClause(OpenMPDirectiveKind DKind,
     OpenMPDirectiveKind DirKind = OMPD_unknown;
     SmallVector<OMPClause *, 5> Clauses;
     StmtResult AssociatedStmt;
+    StmtResult Directive = StmtError();
 
-    StmtResult Directive;
     if (Tok.isNot(tok::r_paren)) {
       ParsingOpenMPDirectiveRAII DirScope(*this);
       ParenBraceBracketBalancer BalancerRAIIObj(*this);

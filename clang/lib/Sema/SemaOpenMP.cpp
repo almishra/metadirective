@@ -6285,22 +6285,19 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
   CS->getCapturedDecl()->setNothrow();
 
   StmtResult IfStmt = StmtError();
-  Stmt *ElseStmt = NULL;
 
+  Stmt *ElseStmt = NULL;
   for (auto i = Clauses.rbegin(); i < Clauses.rend(); i++) {
     OMPWhenClause *WhenClause = dyn_cast<OMPWhenClause>(*i);
     Expr *WhenCondExpr = NULL;
     Stmt *ThenStmt = NULL;
-
-    OMPTraitInfo TI = WhenClause->getTI();
-
     OpenMPDirectiveKind DKind = WhenClause->getDKind();
-    DeclarationNameInfo DirName;
+
     if (DKind != OMPD_unknown)
       ThenStmt = CompoundStmt::Create(Context, {WhenClause->getDirective()},
                                       SourceLocation(), SourceLocation());
 
-    for (const OMPTraitSet &Set : TI.Sets) {
+    for (const OMPTraitSet &Set : WhenClause->getTI().Sets) {
       for (const OMPTraitSelector &Selector : Set.Selectors) {
         switch(Selector.Kind) {
           case TraitSelector::device_arch: {
@@ -6328,9 +6325,26 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
             WhenCondExpr = Selector.ScoreOrCondition;
             break;
           }
+          case TraitSelector::implementation_vendor: {
+            bool vendorMatch = false;
+            for (const OMPTraitProperty &Property : Selector.Properties) {
+              for(auto &T : getLangOpts().OMPTargetTriples) {
+                if(T.getVendorName() == Property.RawString) {
+                  vendorMatch = true;
+                  break;
+                }
+              }
+              if(vendorMatch) break;
+            }
+            // Create a true/false boolean expression and assign to WhenCondExpr
+            auto *C = new (Context) CXXBoolLiteralExpr(vendorMatch,
+                                                       Context.BoolTy,
+                                                       StartLoc);
+            WhenCondExpr = dyn_cast<Expr>(C);
+            break;
+          }
           case TraitSelector::device_isa:
           case TraitSelector::device_kind:
-          case TraitSelector::implementation_vendor:
           case TraitSelector::implementation_extension:
           default: break;
         }
@@ -6351,7 +6365,8 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
     }
 
     if (ThenStmt == NULL)
-      ThenStmt = AStmt;
+      ThenStmt = CompoundStmt::Create(Context, {CS->getCapturedStmt()},
+                                      SourceLocation(), SourceLocation());
 
     IfStmt =
         ActOnIfStmt(SourceLocation(), false, NULL,
