@@ -1502,17 +1502,80 @@ OMPAffinityClause *OMPAffinityClause::CreateEmpty(const ASTContext &C,
 //===----------------------------------------------------------------------===//
 
 void OMPClausePrinter::VisitOMPWhenClause(OMPWhenClause *Node) {
+  if(Node->getTI().Sets.size() == 0) {
+    OS << "default(";
+    return;
+  }
+  OS << "when(";
+  int count = 0;
   for (const OMPTraitSet &Set : Node->getTI().Sets) {
+    if(count == 0) count++;
+    else OS << ", ";
     for (const OMPTraitSelector &Selector : Set.Selectors) {
-      if (Selector.Kind == llvm::omp::TraitSelector::user_condition) {
-        OS << "when(";
-        Node->getTI().print(OS, Policy);
-        OS << ":";
-      } else {
-        OS << "default(";
+      switch(Selector.Kind) {
+        case TraitSelector::device_kind: {
+          OS << "device={kind(";
+          for (const OMPTraitProperty &Property : Selector.Properties) {
+            OS << Property.RawString;
+          }
+          OS << ")}";
+          break;
+        }
+        case TraitSelector::device_arch: {
+          OS << "device={arch(";
+          for (const OMPTraitProperty &Property : Selector.Properties) {
+            OS << Property.RawString;
+          }
+          OS << ")}";
+          break;
+        }
+        case TraitSelector::device_isa: {
+          OS << "device={isa(";
+          for (const OMPTraitProperty &Property : Selector.Properties) {
+            OS << Property.RawString;
+          }
+          OS << ")}";
+          break;
+        }
+        case TraitSelector::implementation_vendor: {
+          OS << "implementation={vendor(";
+          for (const OMPTraitProperty &Property : Selector.Properties) {
+            OS << Property.RawString;
+          }
+          OS << ")}";
+          break;
+        }
+        case TraitSelector::implementation_extension: {
+          OS << "implementation={extension(";
+          for (const OMPTraitProperty &Property : Selector.Properties) {
+            OS << Property.RawString;
+          }
+          OS << ")}";
+          break;
+        }
+        case TraitSelector::user_condition: {
+          OS << "user={condition(";
+          Selector.ScoreOrCondition->printPretty(OS, nullptr, Policy, 0);
+          OS << ")}";
+          break;
+        }
+        case TraitSelector::invalid:
+        case TraitSelector::construct_target:
+        case TraitSelector::construct_teams:
+        case TraitSelector::construct_parallel:
+        case TraitSelector::construct_for:
+        case TraitSelector::construct_simd:
+        case TraitSelector::implementation_unified_address:
+        case TraitSelector::implementation_unified_shared_memory:
+        case TraitSelector::implementation_reverse_offload:
+        case TraitSelector::implementation_dynamic_allocators:
+        case TraitSelector::implementation_atomic_default_mem_order:
+        default:
+          break;
       }
     }
   }
+  OS << ": ";
 }
 
 void OMPClausePrinter::VisitOMPIfClause(OMPIfClause *Node) {
