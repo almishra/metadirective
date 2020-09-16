@@ -6192,6 +6192,10 @@ void OMPClauseWriter::VisitOMPDetachClause(OMPDetachClause *C) {
   Record.AddSourceLocation(C->getLParenLoc());
 }
 
+void OMPClauseWriter::VisitOMPWhenClause(OMPWhenClause *C) {
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
 void OMPClauseWriter::VisitOMPDefaultClause(OMPDefaultClause *C) {
   Record.push_back(unsigned(C->getDefaultKind()));
   Record.AddSourceLocation(C->getLParenLoc());

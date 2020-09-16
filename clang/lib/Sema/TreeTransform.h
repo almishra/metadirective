@@ -1638,6 +1638,18 @@ public:
                                                EndLoc);
   }
 
+  /// Build a new OpenMP 'when' clause.
+  ///
+  /// By default, performs semantic analysis to build the new OpenMP clause.
+  /// Subclasses may override this routine to provide different behavior.
+  OMPClause *RebuildOMPWhenClause(OMPTraitInfo &TI, OpenMPDirectiveKind DKind,
+                                  Stmt *Directive, SourceLocation StartLoc,
+                                  SourceLocation LParenLoc,
+                                  SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPWhenClause(TI, DKind, Directive, StartLoc,
+                                           LParenLoc, EndLoc);
+  }
+
   /// Build a new OpenMP 'default' clause.
   ///
   /// By default, performs semantic analysis to build the new OpenMP clause.
@@ -8378,6 +8390,17 @@ StmtResult TreeTransform<Derived>::TransformOMPExecutableDirective(
 
 template <typename Derived>
 StmtResult
+TreeTransform<Derived>::TransformOMPMetaDirective(OMPMetaDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_metadirective, DirName,
+                                             nullptr, D->getBeginLoc());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult
 TreeTransform<Derived>::TransformOMPParallelDirective(OMPParallelDirective *D) {
   DeclarationNameInfo DirName;
   getDerived().getSema().StartOpenMPDSABlock(OMPD_parallel, DirName, nullptr,
@@ -9048,6 +9071,13 @@ TreeTransform<Derived>::TransformOMPCollapseClause(OMPCollapseClause *C) {
     return nullptr;
   return getDerived().RebuildOMPCollapseClause(
       E.get(), C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc());
+}
+
+template <typename Derived>
+OMPClause *TreeTransform<Derived>::TransformOMPWhenClause(OMPWhenClause *C) {
+  return getDerived().RebuildOMPWhenClause(C->getTI(), C->getDKind(),
+                                           C->getDirective(), C->getBeginLoc(),
+                                           C->getLParenLoc(), C->getEndLoc());
 }
 
 template <typename Derived>

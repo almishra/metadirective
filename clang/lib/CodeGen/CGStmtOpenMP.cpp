@@ -5373,6 +5373,7 @@ static void emitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_exclusive:
   case OMPC_uses_allocators:
   case OMPC_affinity:
+  case OMPC_when:
   default:
     llvm_unreachable("Clause is not allowed in 'omp atomic'.");
   }
@@ -6559,6 +6560,10 @@ void CodeGenFunction::EmitOMPMasterTaskLoopSimdDirective(
       CGOpenMPRuntime::LastprivateConditionalRAII::disable(*this, S);
   OMPLexicalScope Scope(*this, S);
   CGM.getOpenMPRuntime().emitMasterRegion(*this, CodeGen, S.getBeginLoc());
+}
+
+void CodeGenFunction::EmitOMPMetaDirective(const OMPMetaDirective &S) {
+  EmitStmt(S.getIfStmt());
 }
 
 void CodeGenFunction::EmitOMPParallelMasterTaskLoopDirective(
