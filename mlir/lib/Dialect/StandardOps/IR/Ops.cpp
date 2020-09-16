@@ -468,7 +468,7 @@ void AssertOp::getCanonicalizationPatterns(OwningRewritePatternList &patterns,
 //===----------------------------------------------------------------------===//
 
 static LogicalResult verify(AssumeAlignmentOp op) {
-  unsigned alignment = op.alignment().getZExtValue();
+  unsigned alignment = op.alignment();
   if (!llvm::isPowerOf2_32(alignment))
     return op.emitOpError("alignment must be power of 2");
   return success();
@@ -564,7 +564,8 @@ static ParseResult parseGenericAtomicRMWOp(OpAsmParser &parser,
     return failure();
 
   Region *body = result.addRegion();
-  if (parser.parseRegion(*body, llvm::None, llvm::None))
+  if (parser.parseRegion(*body, llvm::None, llvm::None) ||
+      parser.parseOptionalAttrDict(result.attributes))
     return failure();
   result.types.push_back(memrefType.cast<MemRefType>().getElementType());
   return success();
@@ -1311,7 +1312,6 @@ Optional<int64_t> DimOp::getConstantIndex() {
 }
 
 static LogicalResult verify(DimOp op) {
-
   // Assume unknown index to be in range.
   Optional<int64_t> index = op.getConstantIndex();
   if (!index.hasValue())
@@ -1634,6 +1634,83 @@ LogicalResult DmaWaitOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// DynamicTensorFromElementsOp
+//===----------------------------------------------------------------------===//
+
+static ParseResult parseDynamicTensorFromElementsOp(OpAsmParser &parser,
+                                                    OperationState &result) {
+  // Parse operands.
+  SmallVector<OpAsmParser::OperandType, 4> dynamicExtents;
+  Type indexTy = parser.getBuilder().getIndexType();
+  if (parser.parseOperandList(dynamicExtents) ||
+      parser.resolveOperands(dynamicExtents, indexTy, result.operands))
+    return failure();
+
+  // Parse body.
+  Region *body = result.addRegion();
+  if (parser.parseRegion(*body, {}, {}))
+    return failure();
+
+  // Parse result type.
+  Type resultType;
+  if (parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseColonType(resultType))
+    return failure();
+  result.addTypes(resultType);
+
+  return success();
+}
+
+static void print(OpAsmPrinter &p, DynamicTensorFromElementsOp op) {
+  p << "dynamic_tensor_from_elements " << op.dynamicExtents();
+  p.printRegion(op.body());
+  p.printOptionalAttrDict(op.getAttrs());
+  p << " : " << op.getType();
+}
+
+static LogicalResult verify(DynamicTensorFromElementsOp op) {
+  // Ensure that the tensor type has as many dynamic dimensions as are specified
+  // by the operands.
+  RankedTensorType resultTy = op.getType().cast<RankedTensorType>();
+  if (op.getNumOperands() != resultTy.getNumDynamicDims())
+    return op.emitError("must have as many index operands as dynamic extents "
+                        "in the result type");
+
+  // Ensure that region arguments span the index space.
+  if (!llvm::all_of(op.body().getArgumentTypes(),
+                    [](Type ty) { return ty.isIndex(); }))
+    return op.emitError("all body arguments must be index");
+  if (op.body().getNumArguments() != resultTy.getRank())
+    return op.emitError("must have one body argument per input dimension");
+
+  // Ensure that the region yields an element of the right type.
+  auto yieldOp =
+      llvm::cast<YieldOp>(op.body().getBlocks().front().getTerminator());
+  if (yieldOp.value().getType() != resultTy.getElementType())
+    return op.emitOpError(
+        "body must be terminated with a `yield` operation of the tensor "
+        "element type");
+
+  return success();
+}
+
+void DynamicTensorFromElementsOp::build(
+    OpBuilder &b, OperationState &result, Type resultTy,
+    ValueRange dynamicExtents,
+    function_ref<void(OpBuilder &, Location, ValueRange)> bodyBuilder) {
+  build(b, result, resultTy, dynamicExtents);
+
+  // Build and populate body.
+  OpBuilder::InsertionGuard guard(b);
+  Region *bodyRegion = result.regions.front().get();
+  auto rank = resultTy.cast<RankedTensorType>().getRank();
+  SmallVector<Type, 2> argumentTypes(rank, b.getIndexType());
+  Block *bodyBlock =
+      b.createBlock(bodyRegion, bodyRegion->end(), argumentTypes);
+  bodyBuilder(b, result.location, bodyBlock->getArguments());
+}
+
+//===----------------------------------------------------------------------===//
 // ExtractElementOp
 //===----------------------------------------------------------------------===//
 
@@ -1679,42 +1756,18 @@ OpFoldResult ExtractElementOp::fold(ArrayRef<Attribute> operands) {
 // TensorFromElementsOp
 //===----------------------------------------------------------------------===//
 
-static ParseResult parseTensorFromElementsOp(OpAsmParser &parser,
-                                             OperationState &result) {
-  SmallVector<OpAsmParser::OperandType, 4> elementsOperands;
-  Type resultType;
-  if (parser.parseLParen() || parser.parseOperandList(elementsOperands) ||
-      parser.parseRParen() || parser.parseOptionalAttrDict(result.attributes) ||
-      parser.parseColon() || parser.parseType(resultType))
-    return failure();
-
-  if (parser.resolveOperands(elementsOperands,
-                             resultType.cast<ShapedType>().getElementType(),
-                             result.operands))
-    return failure();
-
-  result.addTypes(resultType);
-  return success();
+void TensorFromElementsOp::build(OpBuilder &builder, OperationState &result,
+                                 Type elementType, ValueRange elements) {
+  Type resultTy = RankedTensorType::get({static_cast<int64_t>(elements.size())},
+                                        elementType);
+  result.addOperands(elements);
+  result.addTypes(resultTy);
 }
 
-static void print(OpAsmPrinter &p, TensorFromElementsOp op) {
-  p << "tensor_from_elements(" << op.elements() << ')';
-  p.printOptionalAttrDict(op.getAttrs());
-  p << " : " << op.result().getType();
-}
-
-static LogicalResult verify(TensorFromElementsOp op) {
-  auto resultTensorType = op.result().getType().dyn_cast<RankedTensorType>();
-  if (!resultTensorType)
-    return op.emitOpError("expected result type to be a ranked tensor");
-
-  int64_t elementsCount = static_cast<int64_t>(op.elements().size());
-  if (resultTensorType.getRank() != 1 ||
-      resultTensorType.getShape().front() != elementsCount)
-    return op.emitOpError()
-           << "expected result type to be a 1D tensor with " << elementsCount
-           << (elementsCount == 1 ? " element" : " elements");
-  return success();
+void TensorFromElementsOp::build(OpBuilder &builder, OperationState &result,
+                                 ValueRange elements) {
+  assert(!elements.empty() && "expected at least one element");
+  build(builder, result, elements.front().getType(), elements);
 }
 
 namespace {
@@ -1775,6 +1828,14 @@ bool FPExtOp::areCastCompatible(Type a, Type b) {
 //===----------------------------------------------------------------------===//
 
 bool FPToSIOp::areCastCompatible(Type a, Type b) {
+  return a.isa<FloatType>() && b.isSignlessInteger();
+}
+
+//===----------------------------------------------------------------------===//
+// FPToUIOp
+//===----------------------------------------------------------------------===//
+
+bool FPToUIOp::areCastCompatible(Type a, Type b) {
   return a.isa<FloatType>() && b.isSignlessInteger();
 }
 
@@ -2302,6 +2363,15 @@ OpFoldResult SubIOp::fold(ArrayRef<Attribute> operands) {
 
   return constFoldBinaryOp<IntegerAttr>(operands,
                                         [](APInt a, APInt b) { return a - b; });
+}
+
+//===----------------------------------------------------------------------===//
+// UIToFPOp
+//===----------------------------------------------------------------------===//
+
+// uitofp is applicable from integer types to float types.
+bool UIToFPOp::areCastCompatible(Type a, Type b) {
+  return a.isSignlessInteger() && b.isa<FloatType>();
 }
 
 //===----------------------------------------------------------------------===//

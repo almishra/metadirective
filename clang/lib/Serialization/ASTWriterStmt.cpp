@@ -152,6 +152,8 @@ void ASTStmtWriter::VisitIfStmt(IfStmt *S) {
     Record.AddStmt(S->getInit());
 
   Record.AddSourceLocation(S->getIfLoc());
+  Record.AddSourceLocation(S->getLParenLoc());
+  Record.AddSourceLocation(S->getRParenLoc());
   if (HasElse)
     Record.AddSourceLocation(S->getElseLoc());
 
@@ -175,6 +177,8 @@ void ASTStmtWriter::VisitSwitchStmt(SwitchStmt *S) {
     Record.AddDeclRef(S->getConditionVariable());
 
   Record.AddSourceLocation(S->getSwitchLoc());
+  Record.AddSourceLocation(S->getLParenLoc());
+  Record.AddSourceLocation(S->getRParenLoc());
 
   for (SwitchCase *SC = S->getSwitchCaseList(); SC;
        SC = SC->getNextSwitchCase())
@@ -2165,13 +2169,6 @@ void ASTStmtWriter::VisitOMPExecutableDirective(OMPExecutableDirective *E) {
   Record.writeOMPChildren(E->Data);
   Record.AddSourceLocation(E->getBeginLoc());
   Record.AddSourceLocation(E->getEndLoc());
-}
-
-void ASTStmtWriter::VisitOMPMetaDirective(OMPMetaDirective *D) {
-  VisitStmt(D);
-  Record.push_back(D->getNumClauses());
-  VisitOMPExecutableDirective(D);
-  Code = serialization::STMT_OMP_META_DIRECTIVE;
 }
 
 void ASTStmtWriter::VisitOMPLoopDirective(OMPLoopDirective *D) {

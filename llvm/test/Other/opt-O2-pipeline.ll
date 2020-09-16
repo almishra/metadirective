@@ -1,4 +1,4 @@
-; RUN: opt -mtriple=x86_64-- -O2 -debug-pass=Structure < %s -o /dev/null 2>&1 | FileCheck --check-prefixes=CHECK,%llvmcheckext %s 
+; RUN: opt -enable-new-pm=0 -mtriple=x86_64-- -O2 -debug-pass=Structure < %s -o /dev/null 2>&1 | FileCheck --check-prefixes=CHECK,%llvmcheckext %s 
 
 ; REQUIRES: asserts
 
@@ -158,15 +158,14 @@
 ; CHECK-NEXT:         Value Propagation
 ; CHECK-NEXT:         Basic Alias Analysis (stateless AA impl)
 ; CHECK-NEXT:         Function Alias Analysis Results
-; CHECK-NEXT:         Phi Values Analysis
-; CHECK-NEXT:         Memory Dependence Analysis
-; CHECK-NEXT:         Dead Store Elimination
-; CHECK-NEXT:         Function Alias Analysis Results
+; CHECK-NEXT:         Post-Dominator Tree Construction
 ; CHECK-NEXT:         Memory SSA
+; CHECK-NEXT:         Dead Store Elimination
 ; CHECK-NEXT:         Natural Loop Information
 ; CHECK-NEXT:         Canonicalize natural loops
 ; CHECK-NEXT:         LCSSA Verifier
 ; CHECK-NEXT:         Loop-Closed SSA Form Pass
+; CHECK-NEXT:         Function Alias Analysis Results
 ; CHECK-NEXT:         Scalar Evolution Analysis
 ; CHECK-NEXT:         Loop Pass Manager
 ; CHECK-NEXT:           Loop Invariant Code Motion

@@ -238,6 +238,10 @@ def FeaturePairedVectorMemops:
   SubtargetFeature<"paired-vector-memops", "PairedVectorMemops", "true",
                    "32Byte load and store instructions",
                    [FeatureISA3_0]>;
+def FeatureMMA : SubtargetFeature<"mma", "HasMMA", "true",
+                                  "Enable MMA instructions",
+                                  [FeatureP8Vector, FeatureP9Altivec,
+                                   FeaturePairedVectorMemops]>;
 
 def FeaturePredictableSelectIsExpensive :
   SubtargetFeature<"predictable-select-expensive",
@@ -321,6 +325,8 @@ def ProcessorFeatures {
     [DirectivePwr9,
      FeatureP9Altivec,
      FeatureP9Vector,
+     FeaturePPCPreRASched,
+     FeaturePPCPostRASched,
      FeatureISA3_0,
      FeaturePredictableSelectIsExpensive
     ];
@@ -330,9 +336,7 @@ def ProcessorFeatures {
   // dispatch for vector operations than scalar ones. For the time being,
   // this list also includes scheduling-related features since we do not have
   // enough info to create custom scheduling strategies for future CPUs.
-  list<SubtargetFeature> P9SpecificFeatures = [FeatureVectorsUseTwoUnits,
-                                               FeaturePPCPreRASched,
-                                               FeaturePPCPostRASched];
+  list<SubtargetFeature> P9SpecificFeatures = [FeatureVectorsUseTwoUnits];
   list<SubtargetFeature> P9InheritableFeatures =
     !listconcat(P8InheritableFeatures, P9AdditionalFeatures);
   list<SubtargetFeature> P9Features =
@@ -343,7 +347,8 @@ def ProcessorFeatures {
   // still exist with the exception of those we know are Power9 specific.
   list<SubtargetFeature> P10AdditionalFeatures =
     [DirectivePwr10, FeatureISA3_1, FeaturePrefixInstrs,
-     FeaturePCRelativeMemops, FeatureP10Vector, FeaturePairedVectorMemops];
+     FeaturePCRelativeMemops, FeatureP10Vector, FeatureMMA,
+     FeaturePairedVectorMemops];
   list<SubtargetFeature> P10SpecificFeatures = [];
   list<SubtargetFeature> P10InheritableFeatures =
     !listconcat(P9InheritableFeatures, P10AdditionalFeatures);
@@ -428,6 +433,7 @@ def getAltVSXFMAOpcode : InstrMapping {
 
 include "PPCRegisterInfo.td"
 include "PPCSchedule.td"
+include "GISel/PPCRegisterBanks.td"
 
 //===----------------------------------------------------------------------===//
 // PowerPC processors supported.
@@ -553,7 +559,7 @@ def : ProcessorModel<"pwr7", P7Model, ProcessorFeatures.P7Features>;
 def : ProcessorModel<"pwr8", P8Model, ProcessorFeatures.P8Features>;
 def : ProcessorModel<"pwr9", P9Model, ProcessorFeatures.P9Features>;
 // No scheduler model yet.
-def : ProcessorModel<"pwr10", NoSchedModel, ProcessorFeatures.P10Features>;
+def : ProcessorModel<"pwr10", P9Model, ProcessorFeatures.P10Features>;
 // No scheduler model for future CPU.
 def : ProcessorModel<"future", NoSchedModel,
                   ProcessorFeatures.FutureFeatures>;

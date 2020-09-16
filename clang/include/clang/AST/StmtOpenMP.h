@@ -362,44 +362,6 @@ public:
   }
 };
 
-/// This represents '#pragma omp metadirective' directive.
-///
-/// \code
-/// #pragma omp metadirective when(user={condition(N>10)}: parallel for)
-/// \endcode
-/// In this example directive '#pragma omp metadirective' has clauses 'when'
-/// with a dynamic user condition to check if a variable 'N > 10'
-///
-class OMPMetaDirective final : public OMPExecutableDirective {
-  friend class ASTStmtReader;
-  friend class OMPExecutableDirective;
-  Stmt *IfStmt;
-
-  OMPMetaDirective(SourceLocation StartLoc, SourceLocation EndLoc)
-      : OMPExecutableDirective(OMPMetaDirectiveClass,
-                               llvm::omp::OMPD_metadirective, StartLoc,
-                               EndLoc) {}
-  explicit OMPMetaDirective()
-      : OMPExecutableDirective(OMPMetaDirectiveClass,
-                               llvm::omp::OMPD_metadirective, SourceLocation(),
-                               SourceLocation()) {}
-
-public:
-  static OMPMetaDirective *Create(const ASTContext &C, SourceLocation StartLoc,
-                                  SourceLocation EndLoc,
-                                  ArrayRef<OMPClause *> Clauses,
-                                  Stmt *AssociatedStmt, Stmt *IfStmt);
-  static OMPMetaDirective *CreateEmpty(const ASTContext &C, unsigned NumClauses,
-                                       EmptyShell);
-
-  void setIfStmt(Stmt *stmt) { IfStmt = stmt; }
-  Stmt *getIfStmt() const { return IfStmt; }
-
-  static bool classof(const Stmt *T) {
-    return T->getStmtClass() == OMPMetaDirectiveClass;
-  }
-};
-
 /// This represents '#pragma omp parallel' directive.
 ///
 /// \code
@@ -3047,7 +3009,6 @@ class OMPCancellationPointDirective : public OMPExecutableDirective {
   ///
   /// \param StartLoc Starting location of the directive kind.
   /// \param EndLoc Ending location of the directive.
-  /// \param Data Data storage, containing info about associated clauses,
   /// statements and child expressions.
   ///
   OMPCancellationPointDirective(SourceLocation StartLoc, SourceLocation EndLoc)
@@ -3056,9 +3017,6 @@ class OMPCancellationPointDirective : public OMPExecutableDirective {
                                EndLoc) {}
 
   /// Build an empty directive.
-  /// \param Data Data storage, containing info about associated clauses,
-  /// statements and child expressions.
-  ///
   explicit OMPCancellationPointDirective()
       : OMPExecutableDirective(OMPCancellationPointDirectiveClass,
                                llvm::omp::OMPD_cancellation_point,

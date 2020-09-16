@@ -48,8 +48,6 @@ add_entrypoint_object(
     strcmp.cpp
   HDRS
     strcmp.h
-  DEPENDS
-    libc.include.string
 )
 
 add_entrypoint_object(
@@ -128,6 +126,26 @@ add_entrypoint_object(
     strpbrk.cpp
   HDRS
     strpbrk.h
+  DEPENDS
+    .string_utils
+)
+
+add_entrypoint_object(
+  strtok
+  SRCS
+    strtok.cpp
+  HDRS
+    strtok.h
+  DEPENDS
+    .string_utils
+)
+
+add_entrypoint_object(
+  strtok_r
+  SRCS
+    strtok_r.cpp
+  HDRS
+    strtok_r.h
   DEPENDS
     .string_utils
 )

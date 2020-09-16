@@ -1136,7 +1136,7 @@ define <2 x float> @expandload_v2f32_v2i1(float* %base, <2 x float> %src0, <2 x 
 ; SSE2-NEXT:    je LBB4_4
 ; SSE2-NEXT:  LBB4_3: ## %cond.load1
 ; SSE2-NEXT:    movss (%rdi), %xmm1 ## xmm1 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,0],xmm0[0,0]
+; SSE2-NEXT:    movlhps {{.*#+}} xmm1 = xmm1[0],xmm0[0]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[2,0],xmm0[2,3]
 ; SSE2-NEXT:    movaps %xmm1, %xmm0
 ; SSE2-NEXT:    retq
@@ -1222,29 +1222,25 @@ define <2 x float> @expandload_v2f32_v2i1(float* %base, <2 x float> %src0, <2 x 
 define <4 x float> @expandload_v4f32_const(float* %base, <4 x float> %src0) {
 ; SSE2-LABEL: expandload_v4f32_const:
 ; SSE2:       ## %bb.0:
-; SSE2-NEXT:    movss (%rdi), %xmm2 ## xmm2 = mem[0],zero,zero,zero
-; SSE2-NEXT:    movss 4(%rdi), %xmm1 ## xmm1 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,0],xmm2[0,0]
+; SSE2-NEXT:    movsd (%rdi), %xmm1 ## xmm1 = mem[0],zero
 ; SSE2-NEXT:    movss 8(%rdi), %xmm2 ## xmm2 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm2 = xmm2[0,0],xmm0[3,0]
-; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[2,0],xmm2[0,2]
+; SSE2-NEXT:    shufps {{.*#+}} xmm0 = xmm0[3,1],xmm2[0,3]
+; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,1],xmm0[2,0]
 ; SSE2-NEXT:    movaps %xmm1, %xmm0
 ; SSE2-NEXT:    retq
 ;
 ; SSE42-LABEL: expandload_v4f32_const:
 ; SSE42:       ## %bb.0:
-; SSE42-NEXT:    movss (%rdi), %xmm1 ## xmm1 = mem[0],zero,zero,zero
-; SSE42-NEXT:    blendps {{.*#+}} xmm0 = xmm1[0],xmm0[1,2,3]
-; SSE42-NEXT:    insertps $16, 4(%rdi), %xmm0 ## xmm0 = xmm0[0],mem[0],xmm0[2,3]
-; SSE42-NEXT:    insertps $32, 8(%rdi), %xmm0 ## xmm0 = xmm0[0,1],mem[0],xmm0[3]
+; SSE42-NEXT:    movsd (%rdi), %xmm1 ## xmm1 = mem[0],zero
+; SSE42-NEXT:    insertps $32, 8(%rdi), %xmm1 ## xmm1 = xmm1[0,1],mem[0],xmm1[3]
+; SSE42-NEXT:    blendps {{.*#+}} xmm0 = xmm1[0,1,2],xmm0[3]
 ; SSE42-NEXT:    retq
 ;
 ; AVX1OR2-LABEL: expandload_v4f32_const:
 ; AVX1OR2:       ## %bb.0:
-; AVX1OR2-NEXT:    vmovss (%rdi), %xmm1 ## xmm1 = mem[0],zero,zero,zero
-; AVX1OR2-NEXT:    vblendps {{.*#+}} xmm0 = xmm1[0],xmm0[1,2,3]
-; AVX1OR2-NEXT:    vinsertps $16, 4(%rdi), %xmm0, %xmm0 ## xmm0 = xmm0[0],mem[0],xmm0[2,3]
-; AVX1OR2-NEXT:    vinsertps $32, 8(%rdi), %xmm0, %xmm0 ## xmm0 = xmm0[0,1],mem[0],xmm0[3]
+; AVX1OR2-NEXT:    vmovsd (%rdi), %xmm1 ## xmm1 = mem[0],zero
+; AVX1OR2-NEXT:    vinsertps $32, 8(%rdi), %xmm1, %xmm1 ## xmm1 = xmm1[0,1],mem[0],xmm1[3]
+; AVX1OR2-NEXT:    vblendps {{.*#+}} xmm0 = xmm1[0,1,2],xmm0[3]
 ; AVX1OR2-NEXT:    retq
 ;
 ; AVX512F-LABEL: expandload_v4f32_const:
@@ -1279,53 +1275,39 @@ define <16 x float> @expandload_v16f32_const(float* %base, <16 x float> %src0) {
 ; SSE2:       ## %bb.0:
 ; SSE2-NEXT:    movups (%rdi), %xmm0
 ; SSE2-NEXT:    movups 16(%rdi), %xmm1
-; SSE2-NEXT:    movss 32(%rdi), %xmm5 ## xmm5 = mem[0],zero,zero,zero
-; SSE2-NEXT:    movss 36(%rdi), %xmm4 ## xmm4 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm4 = xmm4[0,0],xmm5[0,0]
-; SSE2-NEXT:    movss 40(%rdi), %xmm5 ## xmm5 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm5 = xmm5[0,0],xmm2[3,0]
-; SSE2-NEXT:    shufps {{.*#+}} xmm4 = xmm4[2,0],xmm5[0,2]
-; SSE2-NEXT:    movss 44(%rdi), %xmm2 ## xmm2 = mem[0],zero,zero,zero
-; SSE2-NEXT:    movss 48(%rdi), %xmm5 ## xmm5 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm5 = xmm5[0,0],xmm2[0,0]
-; SSE2-NEXT:    movss 52(%rdi), %xmm2 ## xmm2 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm2 = xmm2[0,0],xmm3[3,0]
-; SSE2-NEXT:    shufps {{.*#+}} xmm5 = xmm5[2,0],xmm2[0,2]
-; SSE2-NEXT:    movaps %xmm4, %xmm2
-; SSE2-NEXT:    movaps %xmm5, %xmm3
+; SSE2-NEXT:    movsd 44(%rdi), %xmm4 ## xmm4 = mem[0],zero
+; SSE2-NEXT:    movss 52(%rdi), %xmm6 ## xmm6 = mem[0],zero,zero,zero
+; SSE2-NEXT:    movsd 32(%rdi), %xmm5 ## xmm5 = mem[0],zero
+; SSE2-NEXT:    movss 40(%rdi), %xmm7 ## xmm7 = mem[0],zero,zero,zero
+; SSE2-NEXT:    shufps {{.*#+}} xmm2 = xmm2[3,1],xmm7[0,3]
+; SSE2-NEXT:    shufps {{.*#+}} xmm5 = xmm5[0,1],xmm2[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm3 = xmm3[3,1],xmm6[0,3]
+; SSE2-NEXT:    shufps {{.*#+}} xmm4 = xmm4[0,1],xmm3[2,0]
+; SSE2-NEXT:    movaps %xmm5, %xmm2
+; SSE2-NEXT:    movaps %xmm4, %xmm3
 ; SSE2-NEXT:    retq
 ;
 ; SSE42-LABEL: expandload_v16f32_const:
 ; SSE42:       ## %bb.0:
+; SSE42-NEXT:    movsd 44(%rdi), %xmm4 ## xmm4 = mem[0],zero
+; SSE42-NEXT:    insertps $32, 52(%rdi), %xmm4 ## xmm4 = xmm4[0,1],mem[0],xmm4[3]
+; SSE42-NEXT:    movsd 32(%rdi), %xmm5 ## xmm5 = mem[0],zero
+; SSE42-NEXT:    insertps $32, 40(%rdi), %xmm5 ## xmm5 = xmm5[0,1],mem[0],xmm5[3]
 ; SSE42-NEXT:    movups (%rdi), %xmm0
 ; SSE42-NEXT:    movups 16(%rdi), %xmm1
-; SSE42-NEXT:    movss 32(%rdi), %xmm4 ## xmm4 = mem[0],zero,zero,zero
-; SSE42-NEXT:    blendps {{.*#+}} xmm2 = xmm4[0],xmm2[1,2,3]
-; SSE42-NEXT:    insertps $16, 36(%rdi), %xmm2 ## xmm2 = xmm2[0],mem[0],xmm2[2,3]
-; SSE42-NEXT:    insertps $32, 40(%rdi), %xmm2 ## xmm2 = xmm2[0,1],mem[0],xmm2[3]
-; SSE42-NEXT:    movss 44(%rdi), %xmm4 ## xmm4 = mem[0],zero,zero,zero
-; SSE42-NEXT:    blendps {{.*#+}} xmm3 = xmm4[0],xmm3[1,2,3]
-; SSE42-NEXT:    insertps $16, 48(%rdi), %xmm3 ## xmm3 = xmm3[0],mem[0],xmm3[2,3]
-; SSE42-NEXT:    insertps $32, 52(%rdi), %xmm3 ## xmm3 = xmm3[0,1],mem[0],xmm3[3]
+; SSE42-NEXT:    blendps {{.*#+}} xmm2 = xmm5[0,1,2],xmm2[3]
+; SSE42-NEXT:    blendps {{.*#+}} xmm3 = xmm4[0,1,2],xmm3[3]
 ; SSE42-NEXT:    retq
 ;
 ; AVX1OR2-LABEL: expandload_v16f32_const:
 ; AVX1OR2:       ## %bb.0:
-; AVX1OR2-NEXT:    vmovups (%rdi), %xmm0
-; AVX1OR2-NEXT:    vmovsd 16(%rdi), %xmm2 ## xmm2 = mem[0],zero
-; AVX1OR2-NEXT:    vinsertps $32, 24(%rdi), %xmm2, %xmm2 ## xmm2 = xmm2[0,1],mem[0],xmm2[3]
-; AVX1OR2-NEXT:    vinsertps $48, 28(%rdi), %xmm2, %xmm2 ## xmm2 = xmm2[0,1,2],mem[0]
-; AVX1OR2-NEXT:    vinsertf128 $1, %xmm2, %ymm0, %ymm0
-; AVX1OR2-NEXT:    vmovss 32(%rdi), %xmm2 ## xmm2 = mem[0],zero,zero,zero
-; AVX1OR2-NEXT:    vblendps {{.*#+}} xmm2 = xmm2[0],xmm1[1,2,3]
-; AVX1OR2-NEXT:    vinsertps $16, 36(%rdi), %xmm2, %xmm2 ## xmm2 = xmm2[0],mem[0],xmm2[2,3]
+; AVX1OR2-NEXT:    vmovsd 44(%rdi), %xmm0 ## xmm0 = mem[0],zero
+; AVX1OR2-NEXT:    vinsertps $32, 52(%rdi), %xmm0, %xmm0 ## xmm0 = xmm0[0,1],mem[0],xmm0[3]
+; AVX1OR2-NEXT:    vmovsd 32(%rdi), %xmm2 ## xmm2 = mem[0],zero
 ; AVX1OR2-NEXT:    vinsertps $32, 40(%rdi), %xmm2, %xmm2 ## xmm2 = xmm2[0,1],mem[0],xmm2[3]
-; AVX1OR2-NEXT:    vmovss 44(%rdi), %xmm3 ## xmm3 = mem[0],zero,zero,zero
-; AVX1OR2-NEXT:    vextractf128 $1, %ymm1, %xmm1
-; AVX1OR2-NEXT:    vblendps {{.*#+}} xmm1 = xmm3[0],xmm1[1,2,3]
-; AVX1OR2-NEXT:    vinsertps $16, 48(%rdi), %xmm1, %xmm1 ## xmm1 = xmm1[0],mem[0],xmm1[2,3]
-; AVX1OR2-NEXT:    vinsertps $32, 52(%rdi), %xmm1, %xmm1 ## xmm1 = xmm1[0,1],mem[0],xmm1[3]
-; AVX1OR2-NEXT:    vinsertf128 $1, %xmm1, %ymm2, %ymm1
+; AVX1OR2-NEXT:    vinsertf128 $1, %xmm0, %ymm2, %ymm2
+; AVX1OR2-NEXT:    vmovups (%rdi), %ymm0
+; AVX1OR2-NEXT:    vblendps {{.*#+}} ymm1 = ymm2[0,1,2],ymm1[3],ymm2[4,5,6],ymm1[7]
 ; AVX1OR2-NEXT:    retq
 ;
 ; AVX512F-LABEL: expandload_v16f32_const:
@@ -1532,7 +1514,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_64
 ; SSE2-NEXT:  LBB8_63: ## %cond.load121
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm7[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,1],xmm7[2,3]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm7 = xmm7[0,1],xmm8[2,0]
 ; SSE2-NEXT:  LBB8_64: ## %else122
 ; SSE2-NEXT:    movaps %xmm0, (%rax)
@@ -1552,7 +1534,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_4
 ; SSE2-NEXT:  LBB8_3: ## %cond.load1
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm0[0,0]
+; SSE2-NEXT:    movlhps {{.*#+}} xmm8 = xmm8[0],xmm0[0]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[2,0],xmm0[2,3]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    movaps %xmm8, %xmm0
@@ -1567,7 +1549,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_8
 ; SSE2-NEXT:  LBB8_7: ## %cond.load9
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm0[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,1],xmm0[2,3]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm0 = xmm0[0,1],xmm8[2,0]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    testb $16, %cl
@@ -1580,7 +1562,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_12
 ; SSE2-NEXT:  LBB8_11: ## %cond.load17
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm1[0,0]
+; SSE2-NEXT:    movlhps {{.*#+}} xmm8 = xmm8[0],xmm1[0]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[2,0],xmm1[2,3]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    movaps %xmm8, %xmm1
@@ -1595,7 +1577,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_16
 ; SSE2-NEXT:  LBB8_15: ## %cond.load25
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm1[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,1],xmm1[2,3]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,1],xmm8[2,0]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    testl $256, %ecx ## imm = 0x100
@@ -1608,7 +1590,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_20
 ; SSE2-NEXT:  LBB8_19: ## %cond.load33
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm2[0,0]
+; SSE2-NEXT:    movlhps {{.*#+}} xmm8 = xmm8[0],xmm2[0]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[2,0],xmm2[2,3]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    movaps %xmm8, %xmm2
@@ -1623,7 +1605,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_24
 ; SSE2-NEXT:  LBB8_23: ## %cond.load41
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm2[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,1],xmm2[2,3]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm2 = xmm2[0,1],xmm8[2,0]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    testl $4096, %ecx ## imm = 0x1000
@@ -1636,7 +1618,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_28
 ; SSE2-NEXT:  LBB8_27: ## %cond.load49
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm3[0,0]
+; SSE2-NEXT:    movlhps {{.*#+}} xmm8 = xmm8[0],xmm3[0]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[2,0],xmm3[2,3]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    movaps %xmm8, %xmm3
@@ -1651,7 +1633,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_32
 ; SSE2-NEXT:  LBB8_31: ## %cond.load57
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm3[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,1],xmm3[2,3]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm3 = xmm3[0,1],xmm8[2,0]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    testl $65536, %ecx ## imm = 0x10000
@@ -1664,7 +1646,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_36
 ; SSE2-NEXT:  LBB8_35: ## %cond.load65
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm4[0,0]
+; SSE2-NEXT:    movlhps {{.*#+}} xmm8 = xmm8[0],xmm4[0]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[2,0],xmm4[2,3]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    movaps %xmm8, %xmm4
@@ -1679,7 +1661,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_40
 ; SSE2-NEXT:  LBB8_39: ## %cond.load73
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm4[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,1],xmm4[2,3]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm4 = xmm4[0,1],xmm8[2,0]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    testl $1048576, %ecx ## imm = 0x100000
@@ -1692,7 +1674,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_44
 ; SSE2-NEXT:  LBB8_43: ## %cond.load81
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm5[0,0]
+; SSE2-NEXT:    movlhps {{.*#+}} xmm8 = xmm8[0],xmm5[0]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[2,0],xmm5[2,3]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    movaps %xmm8, %xmm5
@@ -1707,7 +1689,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_48
 ; SSE2-NEXT:  LBB8_47: ## %cond.load89
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm5[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,1],xmm5[2,3]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm5 = xmm5[0,1],xmm8[2,0]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    testl $16777216, %ecx ## imm = 0x1000000
@@ -1720,7 +1702,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_52
 ; SSE2-NEXT:  LBB8_51: ## %cond.load97
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm6[0,0]
+; SSE2-NEXT:    movlhps {{.*#+}} xmm8 = xmm8[0],xmm6[0]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[2,0],xmm6[2,3]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    movaps %xmm8, %xmm6
@@ -1735,7 +1717,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_56
 ; SSE2-NEXT:  LBB8_55: ## %cond.load105
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm6[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,1],xmm6[2,3]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm6 = xmm6[0,1],xmm8[2,0]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    testl $268435456, %ecx ## imm = 0x10000000
@@ -1748,7 +1730,7 @@ define <32 x float> @expandload_v32f32_v32i32(float* %base, <32 x float> %src0, 
 ; SSE2-NEXT:    je LBB8_60
 ; SSE2-NEXT:  LBB8_59: ## %cond.load113
 ; SSE2-NEXT:    movss (%rsi), %xmm8 ## xmm8 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[0,0],xmm7[0,0]
+; SSE2-NEXT:    movlhps {{.*#+}} xmm8 = xmm8[0],xmm7[0]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm8 = xmm8[2,0],xmm7[2,3]
 ; SSE2-NEXT:    addq $4, %rsi
 ; SSE2-NEXT:    movaps %xmm8, %xmm7
@@ -2826,7 +2808,7 @@ define <4 x i32> @expandload_v4i32_v4i32(i32* %base, <4 x i32> %src0, <4 x i32> 
 ; SSE2-NEXT:    je LBB10_4
 ; SSE2-NEXT:  LBB10_3: ## %cond.load1
 ; SSE2-NEXT:    movss (%rdi), %xmm1 ## xmm1 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,0],xmm0[0,0]
+; SSE2-NEXT:    movlhps {{.*#+}} xmm1 = xmm1[0],xmm0[0]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[2,0],xmm0[2,3]
 ; SSE2-NEXT:    addq $4, %rdi
 ; SSE2-NEXT:    movaps %xmm1, %xmm0
@@ -2841,7 +2823,7 @@ define <4 x i32> @expandload_v4i32_v4i32(i32* %base, <4 x i32> %src0, <4 x i32> 
 ; SSE2-NEXT:    je LBB10_8
 ; SSE2-NEXT:  LBB10_7: ## %cond.load9
 ; SSE2-NEXT:    movss (%rdi), %xmm1 ## xmm1 = mem[0],zero,zero,zero
-; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,0],xmm0[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,1],xmm0[2,3]
 ; SSE2-NEXT:    shufps {{.*#+}} xmm0 = xmm0[0,1],xmm1[2,0]
 ; SSE2-NEXT:    retq
 ;

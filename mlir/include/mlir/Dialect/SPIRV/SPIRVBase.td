@@ -248,6 +248,24 @@ def QueryCapabilityInterface : OpInterface<"QueryCapabilityInterface"> {
 }
 
 //===----------------------------------------------------------------------===//
+// SPIR-V target GPU vendor and device definitions
+//===----------------------------------------------------------------------===//
+
+// An accelerator other than GPU or CPU
+def SPV_DT_Other         : I32EnumAttrCase<"Other", 0>;
+def SPV_DT_IntegratedGPU : I32EnumAttrCase<"IntegratedGPU", 1>;
+def SPV_DT_DiscreteGPU   : I32EnumAttrCase<"DiscreteGPU", 2>;
+def SPV_DT_CPU           : I32EnumAttrCase<"CPU", 3>;
+// Information missing.
+def SPV_DT_Unknown       : I32EnumAttrCase<"Unknown", 0x7FFFFFFF>;
+
+def SPV_DeviceTypeAttr : SPV_I32EnumAttr<
+  "DeviceType", "valid SPIR-V device types", [
+    SPV_DT_Other, SPV_DT_IntegratedGPU, SPV_DT_DiscreteGPU,
+    SPV_DT_CPU, SPV_DT_Unknown
+  ]>;
+
+//===----------------------------------------------------------------------===//
 // SPIR-V extension definitions
 //===----------------------------------------------------------------------===//
 
@@ -3231,6 +3249,7 @@ def SPV_OC_OpBranchConditional         : I32EnumAttrCase<"OpBranchConditional", 
 def SPV_OC_OpReturn                    : I32EnumAttrCase<"OpReturn", 253>;
 def SPV_OC_OpReturnValue               : I32EnumAttrCase<"OpReturnValue", 254>;
 def SPV_OC_OpUnreachable               : I32EnumAttrCase<"OpUnreachable", 255>;
+def SPV_OC_OpGroupBroadcast            : I32EnumAttrCase<"OpGroupBroadcast", 263>;
 def SPV_OC_OpNoLine                    : I32EnumAttrCase<"OpNoLine", 317>;
 def SPV_OC_OpModuleProcessed           : I32EnumAttrCase<"OpModuleProcessed", 330>;
 def SPV_OC_OpGroupNonUniformElect      : I32EnumAttrCase<"OpGroupNonUniformElect", 333>;
@@ -3251,6 +3270,8 @@ def SPV_OC_OpCooperativeMatrixLoadNV   : I32EnumAttrCase<"OpCooperativeMatrixLoa
 def SPV_OC_OpCooperativeMatrixStoreNV  : I32EnumAttrCase<"OpCooperativeMatrixStoreNV", 5360>;
 def SPV_OC_OpCooperativeMatrixMulAddNV : I32EnumAttrCase<"OpCooperativeMatrixMulAddNV", 5361>;
 def SPV_OC_OpCooperativeMatrixLengthNV : I32EnumAttrCase<"OpCooperativeMatrixLengthNV", 5362>;
+def SPV_OC_OpSubgroupBlockReadINTEL    : I32EnumAttrCase<"OpSubgroupBlockReadINTEL", 5575>;
+def SPV_OC_OpSubgroupBlockWriteINTEL   : I32EnumAttrCase<"OpSubgroupBlockWriteINTEL", 5576>;
 
 def SPV_OpcodeAttr :
     SPV_I32EnumAttr<"Opcode", "valid SPIR-V instructions", [
@@ -3297,8 +3318,8 @@ def SPV_OpcodeAttr :
       SPV_OC_OpAtomicUMax, SPV_OC_OpAtomicAnd, SPV_OC_OpAtomicOr, SPV_OC_OpAtomicXor,
       SPV_OC_OpPhi, SPV_OC_OpLoopMerge, SPV_OC_OpSelectionMerge, SPV_OC_OpLabel,
       SPV_OC_OpBranch, SPV_OC_OpBranchConditional, SPV_OC_OpReturn,
-      SPV_OC_OpReturnValue, SPV_OC_OpUnreachable, SPV_OC_OpNoLine,
-      SPV_OC_OpModuleProcessed, SPV_OC_OpGroupNonUniformElect,
+      SPV_OC_OpReturnValue, SPV_OC_OpUnreachable, SPV_OC_OpGroupBroadcast,
+      SPV_OC_OpNoLine, SPV_OC_OpModuleProcessed, SPV_OC_OpGroupNonUniformElect,
       SPV_OC_OpGroupNonUniformBallot, SPV_OC_OpGroupNonUniformIAdd,
       SPV_OC_OpGroupNonUniformFAdd, SPV_OC_OpGroupNonUniformIMul,
       SPV_OC_OpGroupNonUniformFMul, SPV_OC_OpGroupNonUniformSMin,
@@ -3307,7 +3328,8 @@ def SPV_OpcodeAttr :
       SPV_OC_OpGroupNonUniformFMax, SPV_OC_OpSubgroupBallotKHR,
       SPV_OC_OpTypeCooperativeMatrixNV, SPV_OC_OpCooperativeMatrixLoadNV,
       SPV_OC_OpCooperativeMatrixStoreNV, SPV_OC_OpCooperativeMatrixMulAddNV,
-      SPV_OC_OpCooperativeMatrixLengthNV
+      SPV_OC_OpCooperativeMatrixLengthNV, SPV_OC_OpSubgroupBlockReadINTEL,
+      SPV_OC_OpSubgroupBlockWriteINTEL
     ]>;
 
 // End opcode section. Generated from SPIR-V spec; DO NOT MODIFY!
