@@ -6329,12 +6329,12 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
   CS->getCapturedDecl()->setNothrow();
 
   StmtResult IfStmt = StmtError();
-  Stmt *ElseStmt = NULL;
+  Stmt *ElseStmt = nullptr;
 
-  for (auto i = Clauses.rbegin(); i < Clauses.rend(); i++) {
-    OMPWhenClause *WhenClause = dyn_cast<OMPWhenClause>(*i);
-    Expr *WhenCondExpr = NULL;
-    Stmt *ThenStmt = NULL;
+  for (auto clause = Clauses.rbegin(); clause < Clauses.rend(); clause++) {
+    OMPWhenClause *WhenClause = dyn_cast<OMPWhenClause>(*clause);
+    Expr *WhenCondExpr = nullptr;
+    Stmt *ThenStmt = nullptr;
     OpenMPDirectiveKind DKind = WhenClause->getDKind();
 
     if (DKind != OMPD_unknown)
@@ -6347,7 +6347,7 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
         case TraitSelector::device_arch: {
           bool archMatch = false;
           for (const OMPTraitProperty &Property : Selector.Properties) {
-            for (auto &T : getLangOpts().OMPTargetTriples) {
+            for (const auto &T : getLangOpts().OMPTargetTriples) {
               if (T.getArchName() == Property.RawString) {
                 archMatch = true;
                 break;
@@ -6372,7 +6372,7 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
         case TraitSelector::implementation_vendor: {
           bool vendorMatch = false;
           for (const OMPTraitProperty &Property : Selector.Properties) {
-            for (auto &T : getLangOpts().OMPTargetTriples) {
+            for (const auto &T : getLangOpts().OMPTargetTriples) {
               if (T.getVendorName() == Property.RawString) {
                 vendorMatch = true;
                 break;
@@ -6396,8 +6396,8 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
       }
     }
 
-    if (WhenCondExpr == NULL) {
-      if (ElseStmt != NULL) {
+    if (WhenCondExpr == nullptr) {
+      if (ElseStmt != nullptr) {
         Diag(WhenClause->getBeginLoc(), diag::err_omp_misplaced_default_clause);
         return StmtError();
       }
@@ -6409,12 +6409,12 @@ StmtResult Sema::ActOnOpenMPMetaDirective(ArrayRef<OMPClause *> Clauses,
       continue;
     }
 
-    if (ThenStmt == NULL)
+    if (ThenStmt == nullptr)
       ThenStmt = CompoundStmt::Create(Context, {CS->getCapturedStmt()},
                                       SourceLocation(), SourceLocation());
 
     IfStmt =
-        ActOnIfStmt(SourceLocation(), false, SourceLocation(), NULL,
+        ActOnIfStmt(SourceLocation(), false, SourceLocation(), nullptr,
                     ActOnCondition(getCurScope(), SourceLocation(),
                                    WhenCondExpr, Sema::ConditionKind::Boolean),
                     SourceLocation(), ThenStmt, SourceLocation(), ElseStmt);
