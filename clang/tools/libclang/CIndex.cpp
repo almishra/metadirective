@@ -2221,6 +2221,10 @@ void OMPClauseEnqueue::VisitOMPCollapseClause(const OMPCollapseClause *C) {
   Visitor->AddStmt(C->getNumForLoops());
 }
 
+void OMPClauseEnqueue::VisitOMPWhenClause(const OMPWhenClause *C) {
+  Visitor->AddStmt(C->getDirective());
+}
+
 void OMPClauseEnqueue::VisitOMPDefaultClause(const OMPDefaultClause *C) {}
 
 void OMPClauseEnqueue::VisitOMPProcBindClause(const OMPProcBindClause *C) {}
@@ -5525,6 +5529,8 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("CXXAccessSpecifier");
   case CXCursor_ModuleImportDecl:
     return cxstring::createRef("ModuleImport");
+  case CXCursor_OMPMetaDirective:
+    return cxstring::createRef("OMPMetaDirective");
   case CXCursor_OMPParallelDirective:
     return cxstring::createRef("OMPParallelDirective");
   case CXCursor_OMPSimdDirective:
