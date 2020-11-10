@@ -521,6 +521,9 @@ protected:
     unsigned Kind : 6;
     unsigned PartOfExplicitCast : 1; // Only set for ImplicitCastExpr.
 
+    /// True if the call expression has some floating-point features.
+    unsigned HasFPFeatures : 1;
+
     /// The number of CXXBaseSpecifiers in the cast. 14 bits would be enough
     /// here. ([implimits] Direct and indirect base classes [16384]).
     unsigned BasePathSize;
@@ -1174,8 +1177,14 @@ public:
   static void EnableStatistics();
   static void PrintStats();
 
+  /// \returns the likelihood of a set of attributes.
+  static Likelihood getLikelihood(ArrayRef<const Attr *> Attrs);
+
   /// \returns the likelihood of a statement.
   static Likelihood getLikelihood(const Stmt *S);
+
+  /// \returns the likelihood attribute of a statement.
+  static const Attr *getLikelihoodAttr(const Stmt *S);
 
   /// \returns the likelihood of the 'then' branch of an 'if' statement. The
   /// 'else' branch is required to determine whether both branches specify the

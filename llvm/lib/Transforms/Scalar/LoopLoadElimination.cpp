@@ -563,9 +563,7 @@ public:
       // Point of no-return, start the transformation.  First, version the loop
       // if necessary.
 
-      LoopVersioning LV(LAI, L, LI, DT, PSE.getSE(), false);
-      LV.setAliasChecks(std::move(Checks));
-      LV.setSCEVChecks(LAI.getPSE().getUnionPredicate());
+      LoopVersioning LV(LAI, Checks, L, LI, DT, PSE.getSE());
       LV.versionLoop();
 
       // After versioning, some of the candidates' pointers could stop being
@@ -623,7 +621,7 @@ eliminateLoadsAcrossLoops(Function &F, LoopInfo &LI, DominatorTree &DT,
   for (Loop *TopLevelLoop : LI)
     for (Loop *L : depth_first(TopLevelLoop))
       // We only handle inner-most loops.
-      if (L->empty())
+      if (L->isInnermost())
         Worklist.push_back(L);
 
   // Now walk the identified inner loops.
@@ -720,7 +718,8 @@ PreservedAnalyses LoopLoadEliminationPass::run(Function &F,
   auto &LAM = AM.getResult<LoopAnalysisManagerFunctionProxy>(F).getManager();
   bool Changed = eliminateLoadsAcrossLoops(
       F, LI, DT, BFI, PSI, [&](Loop &L) -> const LoopAccessInfo & {
-        LoopStandardAnalysisResults AR = {AA, AC, DT, LI, SE, TLI, TTI, MSSA};
+        LoopStandardAnalysisResults AR = {AA,  AC,  DT,      LI,  SE,
+                                          TLI, TTI, nullptr, MSSA};
         return LAM.getResult<LoopAccessAnalysis>(L, AR);
       });
 

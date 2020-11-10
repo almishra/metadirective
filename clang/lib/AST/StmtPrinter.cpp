@@ -644,23 +644,10 @@ void StmtPrinter::PrintOMPExecutableDirective(OMPExecutableDirective *S,
     if (Clause && !Clause->isImplicit()) {
       OS << ' ';
       Printer.Visit(Clause);
-      if (dyn_cast<OMPMetaDirective>(S)) {
-        OMPWhenClause *c = dyn_cast<OMPWhenClause>(Clause);
-        if (c != NULL) {
-          if (c->getDKind() != llvm::omp::OMPD_unknown)
-            OS << getOpenMPDirectiveName(c->getDKind());
-          OS << ")";
-        }
-      }
     }
   OS << NL;
   if (!ForceNoStmt && S->hasAssociatedStmt())
     PrintStmt(S->getRawStmt());
-}
-
-void StmtPrinter::VisitOMPMetaDirective(OMPMetaDirective *Node) {
-  Indent() << "#pragma omp metadirective";
-  PrintOMPExecutableDirective(Node);
 }
 
 void StmtPrinter::VisitOMPParallelDirective(OMPParallelDirective *Node) {
@@ -981,6 +968,10 @@ void StmtPrinter::VisitConstantExpr(ConstantExpr *Node) {
 void StmtPrinter::VisitDeclRefExpr(DeclRefExpr *Node) {
   if (const auto *OCED = dyn_cast<OMPCapturedExprDecl>(Node->getDecl())) {
     OCED->getInit()->IgnoreImpCasts()->printPretty(OS, nullptr, Policy);
+    return;
+  }
+  if (const auto *TPOD = dyn_cast<TemplateParamObjectDecl>(Node->getDecl())) {
+    TPOD->printAsExpr(OS);
     return;
   }
   if (NestedNameSpecifier *Qualifier = Node->getQualifier())

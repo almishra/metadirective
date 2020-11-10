@@ -156,7 +156,6 @@ const OMPClauseWithPreInit *OMPClauseWithPreInit::get(const OMPClause *C) {
   case OMPC_exclusive:
   case OMPC_uses_allocators:
   case OMPC_affinity:
-  case OMPC_when:
     break;
   default:
     break;
@@ -251,7 +250,6 @@ const OMPClauseWithPostUpdate *OMPClauseWithPostUpdate::get(const OMPClause *C) 
   case OMPC_exclusive:
   case OMPC_uses_allocators:
   case OMPC_affinity:
-  case OMPC_when:
     break;
   default:
     break;
@@ -1501,85 +1499,6 @@ OMPAffinityClause *OMPAffinityClause::CreateEmpty(const ASTContext &C,
 //  OpenMP clauses printing methods
 //===----------------------------------------------------------------------===//
 
-void OMPClausePrinter::VisitOMPWhenClause(OMPWhenClause *Node) {
-  if (Node->getTI().Sets.size() == 0) {
-    OS << "default(";
-    return;
-  }
-  OS << "when(";
-  int count = 0;
-  for (const OMPTraitSet &Set : Node->getTI().Sets) {
-    if (count == 0)
-      count++;
-    else
-      OS << ", ";
-    for (const OMPTraitSelector &Selector : Set.Selectors) {
-      switch (Selector.Kind) {
-      case TraitSelector::device_kind: {
-        OS << "device={kind(";
-        for (const OMPTraitProperty &Property : Selector.Properties) {
-          OS << Property.RawString;
-        }
-        OS << ")}";
-        break;
-      }
-      case TraitSelector::device_arch: {
-        OS << "device={arch(";
-        for (const OMPTraitProperty &Property : Selector.Properties) {
-          OS << Property.RawString;
-        }
-        OS << ")}";
-        break;
-      }
-      case TraitSelector::device_isa: {
-        OS << "device={isa(";
-        for (const OMPTraitProperty &Property : Selector.Properties) {
-          OS << Property.RawString;
-        }
-        OS << ")}";
-        break;
-      }
-      case TraitSelector::implementation_vendor: {
-        OS << "implementation={vendor(";
-        for (const OMPTraitProperty &Property : Selector.Properties) {
-          OS << Property.RawString;
-        }
-        OS << ")}";
-        break;
-      }
-      case TraitSelector::implementation_extension: {
-        OS << "implementation={extension(";
-        for (const OMPTraitProperty &Property : Selector.Properties) {
-          OS << Property.RawString;
-        }
-        OS << ")}";
-        break;
-      }
-      case TraitSelector::user_condition: {
-        OS << "user={condition(";
-        Selector.ScoreOrCondition->printPretty(OS, nullptr, Policy, 0);
-        OS << ")}";
-        break;
-      }
-      case TraitSelector::invalid:
-      case TraitSelector::construct_target:
-      case TraitSelector::construct_teams:
-      case TraitSelector::construct_parallel:
-      case TraitSelector::construct_for:
-      case TraitSelector::construct_simd:
-      case TraitSelector::implementation_unified_address:
-      case TraitSelector::implementation_unified_shared_memory:
-      case TraitSelector::implementation_reverse_offload:
-      case TraitSelector::implementation_dynamic_allocators:
-      case TraitSelector::implementation_atomic_default_mem_order:
-      default:
-        break;
-      }
-    }
-  }
-  OS << ": ";
-}
-
 void OMPClausePrinter::VisitOMPIfClause(OMPIfClause *Node) {
   OS << "if(";
   if (Node->getNameModifier() != OMPD_unknown)
@@ -2282,7 +2201,10 @@ void OMPTraitInfo::print(llvm::raw_ostream &OS,
 
       OS << "(";
       if (Selector.Kind == TraitSelector::user_condition) {
-        Selector.ScoreOrCondition->printPretty(OS, nullptr, Policy);
+        if (Selector.ScoreOrCondition)
+          Selector.ScoreOrCondition->printPretty(OS, nullptr, Policy);
+        else
+          OS << "...";
       } else {
 
         if (Selector.ScoreOrCondition) {
@@ -2359,7 +2281,7 @@ OMPTraitInfo::OMPTraitInfo(StringRef MangledName) {
         Property.RawString = PropRestPair.first;
         Property.Kind = getOpenMPContextTraitPropertyKind(
             Set.Kind, Selector.Kind, PropRestPair.first);
-        MangledName = PropRestPair.second;
+        MangledName = MangledName.drop_front(PropRestPair.first.size());
       } while (true);
     } while (true);
   } while (true);

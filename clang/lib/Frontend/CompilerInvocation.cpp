@@ -749,6 +749,8 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
     StringRef Name = A->getValue();
     if (Name == "Accelerate")
       Opts.setVecLib(CodeGenOptions::Accelerate);
+    else if (Name == "libmvec")
+      Opts.setVecLib(CodeGenOptions::LIBMVEC);
     else if (Name == "MASSV")
       Opts.setVecLib(CodeGenOptions::MASSV);
     else if (Name == "SVML")
@@ -884,6 +886,7 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.DebugRangesBaseAddress = Args.hasArg(OPT_fdebug_ranges_base_address);
 
   setPGOInstrumentor(Opts, Args, Diags);
+  Opts.AtomicProfileUpdate = Args.hasArg(OPT_fprofile_update_EQ);
   Opts.InstrProfileOutput =
       std::string(Args.getLastArgValue(OPT_fprofile_instrument_path_EQ));
   Opts.ProfileInstrumentUsePath =
@@ -938,15 +941,8 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.NoEscapingBlockTailCalls =
       Args.hasArg(OPT_fno_escaping_block_tail_calls);
   Opts.FloatABI = std::string(Args.getLastArgValue(OPT_mfloat_abi));
-  Opts.LessPreciseFPMAD = Args.hasArg(OPT_cl_mad_enable) ||
-                          Args.hasArg(OPT_cl_unsafe_math_optimizations) ||
-                          Args.hasArg(OPT_cl_fast_relaxed_math);
   Opts.LimitFloatPrecision =
       std::string(Args.getLastArgValue(OPT_mlimit_float_precision));
-  Opts.CorrectlyRoundedDivSqrt =
-      Args.hasArg(OPT_cl_fp32_correctly_rounded_divide_sqrt);
-  Opts.UniformWGSize =
-      Args.hasArg(OPT_cl_uniform_work_group_size);
   Opts.Reciprocals = Args.getAllArgValues(OPT_mrecip_EQ);
   Opts.StrictFloatCastOverflow =
       !Args.hasArg(OPT_fno_strict_float_cast_overflow);
@@ -998,6 +994,8 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.UniqueInternalLinkageNames =
       Args.hasArg(OPT_funique_internal_linkage_names);
 
+  Opts.SplitMachineFunctions = Args.hasArg(OPT_fsplit_machine_functions);
+
   Opts.MergeFunctions = Args.hasArg(OPT_fmerge_functions);
 
   Opts.NoUseJumpTables = Args.hasArg(OPT_fno_jump_tables);
@@ -1033,7 +1031,15 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.ThinLinkBitcodeFile =
       std::string(Args.getLastArgValue(OPT_fthin_link_bitcode_EQ));
 
-  Opts.HeapProf = Args.hasArg(OPT_fmemory_profile);
+  // The memory profile runtime appends the pid to make this name more unique.
+  const char *MemProfileBasename = "memprof.profraw";
+  if (Args.hasArg(OPT_fmemory_profile_EQ)) {
+    SmallString<128> Path(
+        std::string(Args.getLastArgValue(OPT_fmemory_profile_EQ)));
+    llvm::sys::path::append(Path, MemProfileBasename);
+    Opts.MemoryProfileOutput = std::string(Path);
+  } else if (Args.hasArg(OPT_fmemory_profile))
+    Opts.MemoryProfileOutput = MemProfileBasename;
 
   Opts.MSVolatile = Args.hasArg(OPT_fms_volatile);
 
@@ -1049,9 +1055,8 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.ControlFlowGuardNoChecks = Args.hasArg(OPT_cfguard_no_checks);
   Opts.ControlFlowGuard = Args.hasArg(OPT_cfguard);
 
-  Opts.DisableGCov = Args.hasArg(OPT_test_coverage);
-  Opts.EmitGcovArcs = Args.hasArg(OPT_femit_coverage_data);
-  Opts.EmitGcovNotes = Args.hasArg(OPT_femit_coverage_notes);
+  Opts.EmitGcovNotes = Args.hasArg(OPT_ftest_coverage);
+  Opts.EmitGcovArcs = Args.hasArg(OPT_fprofile_arcs);
   if (Opts.EmitGcovArcs || Opts.EmitGcovNotes) {
     Opts.CoverageDataFile =
         std::string(Args.getLastArgValue(OPT_coverage_data_file));
@@ -1091,23 +1096,21 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   // FIXME: For backend options that are not yet recorded as function
   // attributes in the IR, keep track of them so we can embed them in a
   // separate data section and use them when building the bitcode.
-  if (Opts.getEmbedBitcode() == CodeGenOptions::Embed_All) {
-    for (const auto &A : Args) {
-      // Do not encode output and input.
-      if (A->getOption().getID() == options::OPT_o ||
-          A->getOption().getID() == options::OPT_INPUT ||
-          A->getOption().getID() == options::OPT_x ||
-          A->getOption().getID() == options::OPT_fembed_bitcode ||
-          A->getOption().matches(options::OPT_W_Group))
-        continue;
-      ArgStringList ASL;
-      A->render(Args, ASL);
-      for (const auto &arg : ASL) {
-        StringRef ArgStr(arg);
-        Opts.CmdArgs.insert(Opts.CmdArgs.end(), ArgStr.begin(), ArgStr.end());
-        // using \00 to separate each commandline options.
-        Opts.CmdArgs.push_back('\0');
-      }
+  for (const auto &A : Args) {
+    // Do not encode output and input.
+    if (A->getOption().getID() == options::OPT_o ||
+        A->getOption().getID() == options::OPT_INPUT ||
+        A->getOption().getID() == options::OPT_x ||
+        A->getOption().getID() == options::OPT_fembed_bitcode ||
+        A->getOption().matches(options::OPT_W_Group))
+      continue;
+    ArgStringList ASL;
+    A->render(Args, ASL);
+    for (const auto &arg : ASL) {
+      StringRef ArgStr(arg);
+      Opts.CmdArgs.insert(Opts.CmdArgs.end(), ArgStr.begin(), ArgStr.end());
+      // using \00 to separate each commandline options.
+      Opts.CmdArgs.push_back('\0');
     }
   }
 
@@ -1128,6 +1131,10 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
       getLastArgIntValue(Args, OPT_fxray_instruction_threshold_EQ, 200, Diags);
   Opts.XRayIgnoreLoops = Args.hasArg(OPT_fxray_ignore_loops);
   Opts.XRayOmitFunctionIndex = Args.hasArg(OPT_fno_xray_function_index);
+  Opts.XRayTotalFunctionGroups =
+      getLastArgIntValue(Args, OPT_fxray_function_groups, 1, Diags);
+  Opts.XRaySelectedFunctionGroup =
+      getLastArgIntValue(Args, OPT_fxray_selected_function_group, 0, Diags);
 
   auto XRayInstrBundles =
       Args.getAllArgValues(OPT_fxray_instrumentation_bundle);
@@ -1147,7 +1154,6 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.MNopMCount = Args.hasArg(OPT_mnop_mcount);
   Opts.RecordMCount = Args.hasArg(OPT_mrecord_mcount);
   Opts.PackedStack = Args.hasArg(OPT_mpacked_stack);
-  Opts.EmitOpenCLArgMetadata = Args.hasArg(OPT_cl_kernel_arg_info);
 
   if (const Arg *A = Args.getLastArg(OPT_fcf_protection_EQ)) {
     StringRef Name = A->getValue();
@@ -1164,18 +1170,13 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
     }
   }
 
-  if (const Arg *A = Args.getLastArg(OPT_compress_debug_sections,
-                                     OPT_compress_debug_sections_EQ)) {
-    if (A->getOption().getID() == OPT_compress_debug_sections) {
-      Opts.setCompressDebugSections(llvm::DebugCompressionType::Z);
-    } else {
-      auto DCT = llvm::StringSwitch<llvm::DebugCompressionType>(A->getValue())
-                     .Case("none", llvm::DebugCompressionType::None)
-                     .Case("zlib", llvm::DebugCompressionType::Z)
-                     .Case("zlib-gnu", llvm::DebugCompressionType::GNU)
-                     .Default(llvm::DebugCompressionType::None);
-      Opts.setCompressDebugSections(DCT);
-    }
+  if (const Arg *A = Args.getLastArg(OPT_compress_debug_sections_EQ)) {
+    auto DCT = llvm::StringSwitch<llvm::DebugCompressionType>(A->getValue())
+                   .Case("none", llvm::DebugCompressionType::None)
+                   .Case("zlib", llvm::DebugCompressionType::Z)
+                   .Case("zlib-gnu", llvm::DebugCompressionType::GNU)
+                   .Default(llvm::DebugCompressionType::None);
+    Opts.setCompressDebugSections(DCT);
   }
 
   Opts.RelaxELFRelocations = Args.hasArg(OPT_mrelax_relocations);
@@ -1253,6 +1254,21 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   }
   Opts.SSPBufferSize =
       getLastArgIntValue(Args, OPT_stack_protector_buffer_size, 8, Diags);
+
+  Opts.StackProtectorGuard =
+      std::string(Args.getLastArgValue(OPT_mstack_protector_guard_EQ));
+
+  if (Arg *A = Args.getLastArg(OPT_mstack_protector_guard_offset_EQ)) {
+    StringRef Val = A->getValue();
+    unsigned Offset = Opts.StackProtectorGuardOffset;
+    Val.getAsInteger(10, Offset);
+    Opts.StackProtectorGuardOffset = Offset;
+  }
+
+  Opts.StackProtectorGuardReg =
+      std::string(Args.getLastArgValue(OPT_mstack_protector_guard_reg_EQ,
+                                       "none"));
+
   Opts.StackRealignment = Args.hasArg(OPT_mstackrealign);
   if (Arg *A = Args.getLastArg(OPT_mstack_alignment)) {
     StringRef Val = A->getValue();
@@ -1352,6 +1368,10 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
       Opts.setStructReturnConvention(CodeGenOptions::SRCK_InRegs);
     }
   }
+
+  if (T.isOSAIX() && (Args.hasArg(OPT_mignore_xcoff_visibility) ||
+                      !Args.hasArg(OPT_fvisibility)))
+    Opts.IgnoreXCOFFVisibility = 1;
 
   Opts.DependentLibraries = Args.getAllArgValues(OPT_dependent_lib);
   Opts.LinkerOptions = Args.getAllArgValues(OPT_linker_option);
@@ -1453,8 +1473,11 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
       std::string(Args.getLastArgValue(OPT_fsymbol_partition_EQ));
 
   Opts.ForceAAPCSBitfieldLoad = Args.hasArg(OPT_ForceAAPCSBitfieldLoad);
+  Opts.AAPCSBitfieldWidth =
+      Args.hasFlag(OPT_AAPCSBitfieldWidth, OPT_ForceNoAAPCSBitfieldWidth, true);
 
   Opts.PassByValueIsNoAlias = Args.hasArg(OPT_fpass_by_value_is_noalias);
+
   return Success;
 }
 
@@ -2357,6 +2380,8 @@ void CompilerInvocation::setLangDefaults(LangOptions &Opts, InputKind IK,
     Opts.OpenCLVersion = 120;
   else if (LangStd == LangStandard::lang_opencl20)
     Opts.OpenCLVersion = 200;
+  else if (LangStd == LangStandard::lang_opencl30)
+    Opts.OpenCLVersion = 300;
   else if (LangStd == LangStandard::lang_openclcpp)
     Opts.OpenCLCPlusPlusVersion = 100;
 
@@ -2563,6 +2588,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
         .Cases("cl1.1", "CL1.1", LangStandard::lang_opencl11)
         .Cases("cl1.2", "CL1.2", LangStandard::lang_opencl12)
         .Cases("cl2.0", "CL2.0", LangStandard::lang_opencl20)
+        .Cases("cl3.0", "CL3.0", LangStandard::lang_opencl30)
         .Cases("clc++", "CLC++", LangStandard::lang_openclcpp)
         .Default(LangStandard::lang_unspecified);
 
@@ -2629,6 +2655,9 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
 
   if (Args.hasArg(OPT_fno_cuda_host_device_constexpr))
     Opts.CUDAHostDeviceConstexpr = 0;
+
+  if (Args.hasArg(OPT_fgpu_defer_diag))
+    Opts.GPUDeferDiag = 1;
 
   if (Opts.CUDAIsDevice && Args.hasArg(OPT_fcuda_approx_transcendentals))
     Opts.CUDADeviceApproxTranscendentals = 1;
@@ -2777,6 +2806,38 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   if (Args.hasArg(OPT_fapply_global_visibility_to_externs))
     Opts.SetVisibilityForExternDecls = 1;
 
+  if (Args.hasArg(OPT_fvisibility_from_dllstorageclass)) {
+    Opts.VisibilityFromDLLStorageClass = 1;
+
+    // Translate dllexport defintions to default visibility, by default.
+    if (Arg *O = Args.getLastArg(OPT_fvisibility_dllexport_EQ))
+      Opts.setDLLExportVisibility(parseVisibility(O, Args, Diags));
+    else
+      Opts.setDLLExportVisibility(DefaultVisibility);
+
+    // Translate defintions without an explict DLL storage class to hidden
+    // visibility, by default.
+    if (Arg *O = Args.getLastArg(OPT_fvisibility_nodllstorageclass_EQ))
+      Opts.setNoDLLStorageClassVisibility(parseVisibility(O, Args, Diags));
+    else
+      Opts.setNoDLLStorageClassVisibility(HiddenVisibility);
+
+    // Translate dllimport external declarations to default visibility, by
+    // default.
+    if (Arg *O = Args.getLastArg(OPT_fvisibility_externs_dllimport_EQ))
+      Opts.setExternDeclDLLImportVisibility(parseVisibility(O, Args, Diags));
+    else
+      Opts.setExternDeclDLLImportVisibility(DefaultVisibility);
+
+    // Translate external declarations without an explicit DLL storage class
+    // to hidden visibility, by default.
+    if (Arg *O = Args.getLastArg(OPT_fvisibility_externs_nodllstorageclass_EQ))
+      Opts.setExternDeclNoDLLStorageClassVisibility(
+          parseVisibility(O, Args, Diags));
+    else
+      Opts.setExternDeclNoDLLStorageClassVisibility(HiddenVisibility);
+  }
+
   if (Args.hasArg(OPT_ftrapv)) {
     Opts.setSignedOverflowBehavior(LangOptions::SOB_Trapping);
     // Set the handler, if one is specified.
@@ -2876,7 +2937,8 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.Coroutines = Opts.CPlusPlus20 || Args.hasArg(OPT_fcoroutines_ts);
 
   Opts.ConvergentFunctions = Opts.OpenCL || (Opts.CUDA && Opts.CUDAIsDevice) ||
-    Args.hasArg(OPT_fconvergent_functions);
+                             Opts.SYCLIsDevice ||
+                             Args.hasArg(OPT_fconvergent_functions);
 
   Opts.DoubleSquareBracketAttributes =
       Args.hasFlag(OPT_fdouble_square_bracket_attributes,
@@ -2991,8 +3053,6 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.DumpVTableLayouts = Args.hasArg(OPT_fdump_vtable_layouts);
   Opts.SpellChecking = !Args.hasArg(OPT_fno_spell_checking);
   Opts.NoBitFieldTypeAlign = Args.hasArg(OPT_fno_bitfield_type_align);
-  Opts.SinglePrecisionConstants = Args.hasArg(OPT_cl_single_precision_constant);
-  Opts.FastRelaxedMath = Args.hasArg(OPT_cl_fast_relaxed_math);
   if (Opts.FastRelaxedMath)
     Opts.setDefaultFPContractMode(LangOptions::FPM_Fast);
   Opts.HexagonQdsp6Compat = Args.hasArg(OPT_mqdsp6_compat);
@@ -3183,6 +3243,15 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
 
   // Get the OpenMP target triples if any.
   if (Arg *A = Args.getLastArg(options::OPT_fopenmp_targets_EQ)) {
+    enum ArchPtrSize { Arch16Bit, Arch32Bit, Arch64Bit };
+    auto getArchPtrSize = [](const llvm::Triple &T) {
+      if (T.isArch16Bit())
+        return Arch16Bit;
+      if (T.isArch32Bit())
+        return Arch32Bit;
+      assert(T.isArch64Bit() && "Expected 64-bit architecture");
+      return Arch64Bit;
+    };
 
     for (unsigned i = 0; i < A->getNumValues(); ++i) {
       llvm::Triple TT(A->getValue(i));
@@ -3198,6 +3267,9 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
             TT.getArch() == llvm::Triple::x86 ||
             TT.getArch() == llvm::Triple::x86_64))
         Diags.Report(diag::err_drv_invalid_omp_target) << A->getValue(i);
+      else if (getArchPtrSize(T) != getArchPtrSize(TT))
+        Diags.Report(diag::err_drv_incompatible_omp_arch)
+            << A->getValue(i) << T.str();
       else
         Opts.OMPTargetTriples.push_back(TT);
     }
@@ -3247,47 +3319,6 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
           options::OPT_fno_inline_functions, options::OPT_fno_inline))
     if (InlineArg->getOption().matches(options::OPT_fno_inline))
       Opts.NoInlineDefine = true;
-
-  Opts.FastMath =
-      Args.hasArg(OPT_ffast_math) || Args.hasArg(OPT_cl_fast_relaxed_math);
-  Opts.FiniteMathOnly = Args.hasArg(OPT_ffinite_math_only) ||
-                        Args.hasArg(OPT_ffast_math) ||
-                        Args.hasArg(OPT_cl_finite_math_only) ||
-                        Args.hasArg(OPT_cl_fast_relaxed_math);
-  Opts.UnsafeFPMath = Args.hasArg(OPT_menable_unsafe_fp_math) ||
-                      Args.hasArg(OPT_ffast_math) ||
-                      Args.hasArg(OPT_cl_unsafe_math_optimizations) ||
-                      Args.hasArg(OPT_cl_fast_relaxed_math);
-  Opts.AllowFPReassoc = Args.hasArg(OPT_mreassociate) ||
-                        Args.hasArg(OPT_menable_unsafe_fp_math) ||
-                        Args.hasArg(OPT_ffast_math) ||
-                        Args.hasArg(OPT_cl_unsafe_math_optimizations) ||
-                        Args.hasArg(OPT_cl_fast_relaxed_math);
-  Opts.NoHonorNaNs =
-      Args.hasArg(OPT_menable_no_nans) || Args.hasArg(OPT_ffinite_math_only) ||
-      Args.hasArg(OPT_ffast_math) || Args.hasArg(OPT_cl_finite_math_only) ||
-      Args.hasArg(OPT_cl_fast_relaxed_math);
-  Opts.NoHonorInfs = Args.hasArg(OPT_menable_no_infinities) ||
-                     Args.hasArg(OPT_ffinite_math_only) ||
-                     Args.hasArg(OPT_ffast_math) ||
-                     Args.hasArg(OPT_cl_finite_math_only) ||
-                     Args.hasArg(OPT_cl_fast_relaxed_math);
-  Opts.NoSignedZero = Args.hasArg(OPT_fno_signed_zeros) ||
-                      Args.hasArg(OPT_menable_unsafe_fp_math) ||
-                      Args.hasArg(OPT_ffast_math) ||
-                      Args.hasArg(OPT_cl_no_signed_zeros) ||
-                      Args.hasArg(OPT_cl_unsafe_math_optimizations) ||
-                      Args.hasArg(OPT_cl_fast_relaxed_math);
-  Opts.AllowRecip = Args.hasArg(OPT_freciprocal_math) ||
-                    Args.hasArg(OPT_menable_unsafe_fp_math) ||
-                    Args.hasArg(OPT_ffast_math) ||
-                    Args.hasArg(OPT_cl_unsafe_math_optimizations) ||
-                    Args.hasArg(OPT_cl_fast_relaxed_math);
-  // Currently there's no clang option to enable this individually
-  Opts.ApproxFunc = Args.hasArg(OPT_menable_unsafe_fp_math) ||
-                    Args.hasArg(OPT_ffast_math) ||
-                    Args.hasArg(OPT_cl_unsafe_math_optimizations) ||
-                    Args.hasArg(OPT_cl_fast_relaxed_math);
 
   if (Arg *A = Args.getLastArg(OPT_ffp_contract)) {
     StringRef Val = A->getValue();
@@ -3427,6 +3458,8 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
         Opts.setClangABICompat(LangOptions::ClangABI::Ver7);
       else if (Major <= 9)
         Opts.setClangABICompat(LangOptions::ClangABI::Ver9);
+      else if (Major <= 11)
+        Opts.setClangABICompat(LangOptions::ClangABI::Ver11);
     } else if (Ver != "latest") {
       Diags.Report(diag::err_drv_invalid_value)
           << A->getAsString(Args) << A->getValue();
@@ -3693,7 +3726,7 @@ bool CompilerInvocation::parseSimpleArgs(const ArgList &Args,
                                      ALIAS, ALIASARGS, FLAGS, PARAM, HELPTEXT, \
                                      METAVAR, VALUES, SPELLING, ALWAYS_EMIT,   \
                                      KEYPATH, DEFAULT_VALUE, IS_POSITIVE)      \
-  this->KEYPATH = Args.hasArg(OPT_##ID) && IS_POSITIVE;
+  this->KEYPATH = (Args.hasArg(OPT_##ID) && IS_POSITIVE) || (DEFAULT_VALUE);
 
 #define OPTION_WITH_MARSHALLING_STRING(                                        \
     PREFIX_TYPE, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,        \
@@ -3967,15 +4000,15 @@ void CompilerInvocation::generateCC1CommandLine(
                                      ALIAS, ALIASARGS, FLAGS, PARAM, HELPTEXT, \
                                      METAVAR, VALUES, SPELLING, ALWAYS_EMIT,   \
                                      KEYPATH, DEFAULT_VALUE, IS_POSITIVE)      \
-  if ((FLAGS) & options::CC1Option &&                                            \
-      (ALWAYS_EMIT || this->KEYPATH != DEFAULT_VALUE))                         \
+  if ((FLAGS) & options::CC1Option &&                                          \
+      (ALWAYS_EMIT || this->KEYPATH != (DEFAULT_VALUE)))                       \
     Args.push_back(SPELLING);
 
 #define OPTION_WITH_MARSHALLING_STRING(                                        \
     PREFIX_TYPE, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,        \
     HELPTEXT, METAVAR, VALUES, SPELLING, ALWAYS_EMIT, KEYPATH, DEFAULT_VALUE,  \
     NORMALIZER_RET_TY, NORMALIZER, DENORMALIZER, TABLE_INDEX)                  \
-  if (((FLAGS) & options::CC1Option) &&                                          \
+  if (((FLAGS) & options::CC1Option) &&                                        \
       (ALWAYS_EMIT || this->KEYPATH != DEFAULT_VALUE)) {                       \
     if (Option::KIND##Class == Option::SeparateClass) {                        \
       Args.push_back(SPELLING);                                                \

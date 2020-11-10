@@ -217,7 +217,6 @@ def AsTypeExpr : StmtNode<Expr>;
 
 // OpenMP Directives.
 def OMPExecutableDirective : StmtNode<Stmt, 1>;
-def OMPMetaDirective : StmtNode<OMPExecutableDirective>;
 def OMPLoopDirective : StmtNode<OMPExecutableDirective, 1>;
 def OMPParallelDirective : StmtNode<OMPExecutableDirective>;
 def OMPSimdDirective : StmtNode<OMPLoopDirective>;

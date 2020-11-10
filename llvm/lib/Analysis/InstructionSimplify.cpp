@@ -1698,25 +1698,27 @@ static Value *simplifyAndOrOfICmpsWithLimitConst(ICmpInst *Cmp0, ICmpInst *Cmp1,
   if (!Cmp0->isEquality())
     return nullptr;
 
-  // The equality compare must be against a constant. Convert the 'null' pointer
-  // constant to an integer zero value.
-  APInt MinMaxC;
-  const APInt *C;
-  if (match(Cmp0->getOperand(1), m_APInt(C)))
-    MinMaxC = *C;
-  else if (isa<ConstantPointerNull>(Cmp0->getOperand(1)))
-    MinMaxC = APInt::getNullValue(8);
-  else
-    return nullptr;
-
   // The non-equality compare must include a common operand (X). Canonicalize
   // the common operand as operand 0 (the predicate is swapped if the common
   // operand was operand 1).
   ICmpInst::Predicate Pred0 = Cmp0->getPredicate();
   Value *X = Cmp0->getOperand(0);
   ICmpInst::Predicate Pred1;
-  if (!match(Cmp1, m_c_ICmp(Pred1, m_Specific(X), m_Value())) ||
-      ICmpInst::isEquality(Pred1))
+  bool HasNotOp = match(Cmp1, m_c_ICmp(Pred1, m_Not(m_Specific(X)), m_Value()));
+  if (!HasNotOp && !match(Cmp1, m_c_ICmp(Pred1, m_Specific(X), m_Value())))
+    return nullptr;
+  if (ICmpInst::isEquality(Pred1))
+    return nullptr;
+
+  // The equality compare must be against a constant. Flip bits if we matched
+  // a bitwise not. Convert a null pointer constant to an integer zero value.
+  APInt MinMaxC;
+  const APInt *C;
+  if (match(Cmp0->getOperand(1), m_APInt(C)))
+    MinMaxC = HasNotOp ? ~*C : *C;
+  else if (isa<ConstantPointerNull>(Cmp0->getOperand(1)))
+    MinMaxC = APInt::getNullValue(8);
+  else
     return nullptr;
 
   // DeMorganize if this is 'or': P0 || P1 --> !P0 && !P1.
@@ -2849,6 +2851,42 @@ static Value *simplifyICmpWithBinOpOnLHS(
   return nullptr;
 }
 
+
+// If only one of the icmp's operands has NSW flags, try to prove that:
+//
+//   icmp slt (x + C1), (x +nsw C2)
+//
+// is equivalent to:
+//
+//   icmp slt C1, C2
+//
+// which is true if x + C2 has the NSW flags set and:
+// *) C1 < C2 && C1 >= 0, or
+// *) C2 < C1 && C1 <= 0.
+//
+static bool trySimplifyICmpWithAdds(CmpInst::Predicate Pred, Value *LHS,
+                                    Value *RHS) {
+  // TODO: only support icmp slt for now.
+  if (Pred != CmpInst::ICMP_SLT)
+    return false;
+
+  // Canonicalize nsw add as RHS.
+  if (!match(RHS, m_NSWAdd(m_Value(), m_Value())))
+    std::swap(LHS, RHS);
+  if (!match(RHS, m_NSWAdd(m_Value(), m_Value())))
+    return false;
+
+  Value *X;
+  const APInt *C1, *C2;
+  if (!match(LHS, m_c_Add(m_Value(X), m_APInt(C1))) ||
+      !match(RHS, m_c_Add(m_Specific(X), m_APInt(C2))))
+    return false;
+
+  return (C1->slt(*C2) && C1->isNonNegative()) ||
+         (C2->slt(*C1) && C1->isNonPositive());
+}
+
+
 /// TODO: A large part of this logic is duplicated in InstCombine's
 /// foldICmpBinOp(). We should be able to share that and avoid the code
 /// duplication.
@@ -2898,8 +2936,9 @@ static Value *simplifyICmpWithBinOp(CmpInst::Predicate Pred, Value *LHS,
         return V;
 
     // icmp (X+Y), (X+Z) -> icmp Y,Z for equalities or if there is no overflow.
-    if (A && C && (A == C || A == D || B == C || B == D) && NoLHSWrapProblem &&
-        NoRHSWrapProblem) {
+    bool CanSimplify = (NoLHSWrapProblem && NoRHSWrapProblem) ||
+                       trySimplifyICmpWithAdds(Pred, LHS, RHS);
+    if (A && C && (A == C || A == D || B == C || B == D) && CanSimplify) {
       // Determine Y and Z in the form icmp (X+Y), (X+Z).
       Value *Y, *Z;
       if (A == C) {
@@ -2936,60 +2975,55 @@ static Value *simplifyICmpWithBinOp(CmpInst::Predicate Pred, Value *LHS,
 
   // 0 - (zext X) pred C
   if (!CmpInst::isUnsigned(Pred) && match(LHS, m_Neg(m_ZExt(m_Value())))) {
-    if (ConstantInt *RHSC = dyn_cast<ConstantInt>(RHS)) {
-      if (RHSC->getValue().isStrictlyPositive()) {
-        if (Pred == ICmpInst::ICMP_SLT)
-          return ConstantInt::getTrue(RHSC->getContext());
-        if (Pred == ICmpInst::ICMP_SGE)
-          return ConstantInt::getFalse(RHSC->getContext());
-        if (Pred == ICmpInst::ICMP_EQ)
-          return ConstantInt::getFalse(RHSC->getContext());
-        if (Pred == ICmpInst::ICMP_NE)
-          return ConstantInt::getTrue(RHSC->getContext());
+    const APInt *C;
+    if (match(RHS, m_APInt(C))) {
+      if (C->isStrictlyPositive()) {
+        if (Pred == ICmpInst::ICMP_SLT || Pred == ICmpInst::ICMP_NE)
+          return ConstantInt::getTrue(GetCompareTy(RHS));
+        if (Pred == ICmpInst::ICMP_SGE || Pred == ICmpInst::ICMP_EQ)
+          return ConstantInt::getFalse(GetCompareTy(RHS));
       }
-      if (RHSC->getValue().isNonNegative()) {
+      if (C->isNonNegative()) {
         if (Pred == ICmpInst::ICMP_SLE)
-          return ConstantInt::getTrue(RHSC->getContext());
+          return ConstantInt::getTrue(GetCompareTy(RHS));
         if (Pred == ICmpInst::ICMP_SGT)
-          return ConstantInt::getFalse(RHSC->getContext());
+          return ConstantInt::getFalse(GetCompareTy(RHS));
       }
     }
   }
 
-  // handle:
-  //   CI2 << X == CI
-  //   CI2 << X != CI
-  //
-  //   where CI2 is a power of 2 and CI isn't
-  if (auto *CI = dyn_cast<ConstantInt>(RHS)) {
-    const APInt *CI2Val, *CIVal = &CI->getValue();
-    if (LBO && match(LBO, m_Shl(m_APInt(CI2Val), m_Value())) &&
-        CI2Val->isPowerOf2()) {
-      if (!CIVal->isPowerOf2()) {
-        // CI2 << X can equal zero in some circumstances,
-        // this simplification is unsafe if CI is zero.
-        //
-        // We know it is safe if:
-        // - The shift is nsw, we can't shift out the one bit.
-        // - The shift is nuw, we can't shift out the one bit.
-        // - CI2 is one
-        // - CI isn't zero
-        if (Q.IIQ.hasNoSignedWrap(cast<OverflowingBinaryOperator>(LBO)) ||
-            Q.IIQ.hasNoUnsignedWrap(cast<OverflowingBinaryOperator>(LBO)) ||
-            CI2Val->isOneValue() || !CI->isZero()) {
-          if (Pred == ICmpInst::ICMP_EQ)
-            return ConstantInt::getFalse(RHS->getContext());
-          if (Pred == ICmpInst::ICMP_NE)
-            return ConstantInt::getTrue(RHS->getContext());
-        }
-      }
-      if (CIVal->isSignMask() && CI2Val->isOneValue()) {
-        if (Pred == ICmpInst::ICMP_UGT)
-          return ConstantInt::getFalse(RHS->getContext());
-        if (Pred == ICmpInst::ICMP_ULE)
-          return ConstantInt::getTrue(RHS->getContext());
-      }
+  //   If C2 is a power-of-2 and C is not:
+  //   (C2 << X) == C --> false
+  //   (C2 << X) != C --> true
+  const APInt *C;
+  if (match(LHS, m_Shl(m_Power2(), m_Value())) &&
+      match(RHS, m_APIntAllowUndef(C)) && !C->isPowerOf2()) {
+    // C2 << X can equal zero in some circumstances.
+    // This simplification might be unsafe if C is zero.
+    //
+    // We know it is safe if:
+    // - The shift is nsw. We can't shift out the one bit.
+    // - The shift is nuw. We can't shift out the one bit.
+    // - C2 is one.
+    // - C isn't zero.
+    if (Q.IIQ.hasNoSignedWrap(cast<OverflowingBinaryOperator>(LBO)) ||
+        Q.IIQ.hasNoUnsignedWrap(cast<OverflowingBinaryOperator>(LBO)) ||
+        match(LHS, m_Shl(m_One(), m_Value())) || !C->isNullValue()) {
+      if (Pred == ICmpInst::ICMP_EQ)
+        return ConstantInt::getFalse(GetCompareTy(RHS));
+      if (Pred == ICmpInst::ICMP_NE)
+        return ConstantInt::getTrue(GetCompareTy(RHS));
     }
+  }
+
+  // TODO: This is overly constrained. LHS can be any power-of-2.
+  // (1 << X)  >u 0x8000 --> false
+  // (1 << X) <=u 0x8000 --> true
+  if (match(LHS, m_Shl(m_One(), m_Value())) && match(RHS, m_SignMask())) {
+    if (Pred == ICmpInst::ICMP_UGT)
+      return ConstantInt::getFalse(GetCompareTy(RHS));
+    if (Pred == ICmpInst::ICMP_ULE)
+      return ConstantInt::getTrue(GetCompareTy(RHS));
   }
 
   if (MaxRecurse && LBO && RBO && LBO->getOpcode() == RBO->getOpcode() &&
@@ -3796,15 +3830,30 @@ static Value *SimplifyWithOpReplaced(Value *V, Value *Op, Value *RepOp,
   if (!AllowRefinement && canCreatePoison(cast<Operator>(I)))
     return nullptr;
 
+  // The simplification queries below may return the original value. Consider:
+  //   %div = udiv i32 %arg, %arg2
+  //   %mul = mul nsw i32 %div, %arg2
+  //   %cmp = icmp eq i32 %mul, %arg
+  //   %sel = select i1 %cmp, i32 %div, i32 undef
+  // Replacing %arg by %mul, %div becomes "udiv i32 %mul, %arg2", which
+  // simplifies back to %arg. This can only happen because %mul does not
+  // dominate %div. To ensure a consistent return value contract, we make sure
+  // that this case returns nullptr as well.
+  auto PreventSelfSimplify = [V](Value *Simplified) {
+    return Simplified != V ? Simplified : nullptr;
+  };
+
   // If this is a binary operator, try to simplify it with the replaced op.
   if (auto *B = dyn_cast<BinaryOperator>(I)) {
     if (MaxRecurse) {
       if (B->getOperand(0) == Op)
-        return SimplifyBinOp(B->getOpcode(), RepOp, B->getOperand(1), Q,
-                             MaxRecurse - 1);
+        return PreventSelfSimplify(SimplifyBinOp(B->getOpcode(), RepOp,
+                                                 B->getOperand(1), Q,
+                                                 MaxRecurse - 1));
       if (B->getOperand(1) == Op)
-        return SimplifyBinOp(B->getOpcode(), B->getOperand(0), RepOp, Q,
-                             MaxRecurse - 1);
+        return PreventSelfSimplify(SimplifyBinOp(B->getOpcode(),
+                                                 B->getOperand(0), RepOp, Q,
+                                                 MaxRecurse - 1));
     }
   }
 
@@ -3812,11 +3861,13 @@ static Value *SimplifyWithOpReplaced(Value *V, Value *Op, Value *RepOp,
   if (CmpInst *C = dyn_cast<CmpInst>(I)) {
     if (MaxRecurse) {
       if (C->getOperand(0) == Op)
-        return SimplifyCmpInst(C->getPredicate(), RepOp, C->getOperand(1), Q,
-                               MaxRecurse - 1);
+        return PreventSelfSimplify(SimplifyCmpInst(C->getPredicate(), RepOp,
+                                                   C->getOperand(1), Q,
+                                                   MaxRecurse - 1));
       if (C->getOperand(1) == Op)
-        return SimplifyCmpInst(C->getPredicate(), C->getOperand(0), RepOp, Q,
-                               MaxRecurse - 1);
+        return PreventSelfSimplify(SimplifyCmpInst(C->getPredicate(),
+                                                   C->getOperand(0), RepOp, Q,
+                                                   MaxRecurse - 1));
     }
   }
 
@@ -3826,8 +3877,8 @@ static Value *SimplifyWithOpReplaced(Value *V, Value *Op, Value *RepOp,
       SmallVector<Value *, 8> NewOps(GEP->getNumOperands());
       transform(GEP->operands(), NewOps.begin(),
                 [&](Value *V) { return V == Op ? RepOp : V; });
-      return SimplifyGEPInst(GEP->getSourceElementType(), NewOps, Q,
-                             MaxRecurse - 1);
+      return PreventSelfSimplify(SimplifyGEPInst(GEP->getSourceElementType(),
+                                                 NewOps, Q, MaxRecurse - 1));
     }
   }
 
@@ -3946,10 +3997,8 @@ static Value *simplifySelectWithICmpCond(Value *CondVal, Value *TrueVal,
 
     // Test for a bogus zero-shift-guard-op around funnel-shift or rotate.
     Value *ShAmt;
-    auto isFsh = m_CombineOr(m_Intrinsic<Intrinsic::fshl>(m_Value(X), m_Value(),
-                                                          m_Value(ShAmt)),
-                             m_Intrinsic<Intrinsic::fshr>(m_Value(), m_Value(X),
-                                                          m_Value(ShAmt)));
+    auto isFsh = m_CombineOr(m_FShl(m_Value(X), m_Value(), m_Value(ShAmt)),
+                             m_FShr(m_Value(), m_Value(X), m_Value(ShAmt)));
     // (ShAmt == 0) ? fshl(X, *, ShAmt) : X --> X
     // (ShAmt == 0) ? fshr(*, X, ShAmt) : X --> X
     if (match(TrueVal, isFsh) && FalseVal == X && CmpLHS == ShAmt)
@@ -3960,12 +4009,9 @@ static Value *simplifySelectWithICmpCond(Value *CondVal, Value *TrueVal,
     // intrinsics do not have that problem.
     // We do not allow this transform for the general funnel shift case because
     // that would not preserve the poison safety of the original code.
-    auto isRotate = m_CombineOr(m_Intrinsic<Intrinsic::fshl>(m_Value(X),
-                                                             m_Deferred(X),
-                                                             m_Value(ShAmt)),
-                                m_Intrinsic<Intrinsic::fshr>(m_Value(X),
-                                                             m_Deferred(X),
-                                                             m_Value(ShAmt)));
+    auto isRotate =
+        m_CombineOr(m_FShl(m_Value(X), m_Deferred(X), m_Value(ShAmt)),
+                    m_FShr(m_Value(X), m_Deferred(X), m_Value(ShAmt)));
     // (ShAmt == 0) ? X : fshl(X, X, ShAmt) --> fshl(X, X, ShAmt)
     // (ShAmt == 0) ? X : fshr(X, X, ShAmt) --> fshr(X, X, ShAmt)
     if (match(FalseVal, isRotate) && TrueVal == X && CmpLHS == ShAmt &&
@@ -4081,11 +4127,11 @@ static Value *SimplifySelectInst(Value *Cond, Value *TrueVal, Value *FalseVal,
   // long as the other value isn't poison.
   // select ?, undef, X -> X
   if (Q.isUndefValue(TrueVal) &&
-      isGuaranteedNotToBeUndefOrPoison(FalseVal, Q.CxtI, Q.DT))
+      isGuaranteedNotToBeUndefOrPoison(FalseVal, Q.AC, Q.CxtI, Q.DT))
     return FalseVal;
   // select ?, X, undef -> X
   if (Q.isUndefValue(FalseVal) &&
-      isGuaranteedNotToBeUndefOrPoison(TrueVal, Q.CxtI, Q.DT))
+      isGuaranteedNotToBeUndefOrPoison(TrueVal, Q.AC, Q.CxtI, Q.DT))
     return TrueVal;
 
   // Deal with partial undef vector constants: select ?, VecC, VecC' --> VecC''
@@ -5447,18 +5493,43 @@ static Value *simplifyBinaryIntrinsic(Function *F, Value *Op0, Value *Op1,
     // If the arguments are the same, this is a no-op.
     if (Op0 == Op1) return Op0;
 
-    // If one argument is undef, return the other argument.
-    if (Q.isUndefValue(Op0))
-      return Op1;
+    // Canonicalize constant operand as Op1.
+    if (isa<Constant>(Op0))
+      std::swap(Op0, Op1);
+
+    // If an argument is undef, return the other argument.
     if (Q.isUndefValue(Op1))
       return Op0;
 
-    // If one argument is NaN, return other or NaN appropriately.
     bool PropagateNaN = IID == Intrinsic::minimum || IID == Intrinsic::maximum;
-    if (match(Op0, m_NaN()))
-      return PropagateNaN ? Op0 : Op1;
+    bool IsMin = IID == Intrinsic::minimum || IID == Intrinsic::minnum;
+
+    // minnum(X, nan) -> X
+    // maxnum(X, nan) -> X
+    // minimum(X, nan) -> nan
+    // maximum(X, nan) -> nan
     if (match(Op1, m_NaN()))
-      return PropagateNaN ? Op1 : Op0;
+      return PropagateNaN ? propagateNaN(cast<Constant>(Op1)) : Op0;
+
+    // In the following folds, inf can be replaced with the largest finite
+    // float, if the ninf flag is set.
+    const APFloat *C;
+    if (match(Op1, m_APFloat(C)) &&
+        (C->isInfinity() || (Q.CxtI->hasNoInfs() && C->isLargest()))) {
+      // minnum(X, -inf) -> -inf
+      // maxnum(X, +inf) -> +inf
+      // minimum(X, -inf) -> -inf if nnan
+      // maximum(X, +inf) -> +inf if nnan
+      if (C->isNegative() == IsMin && (!PropagateNaN || Q.CxtI->hasNoNaNs()))
+        return ConstantFP::get(ReturnType, *C);
+
+      // minnum(X, +inf) -> X if nnan
+      // maxnum(X, -inf) -> X if nnan
+      // minimum(X, +inf) -> X
+      // maximum(X, -inf) -> X
+      if (C->isNegative() != IsMin && (PropagateNaN || Q.CxtI->hasNoNaNs()))
+        return Op0;
+    }
 
     // Min/max of the same operation with common operand:
     // m(m(X, Y)), X --> m(X, Y) (4 commuted variants)
@@ -5471,20 +5542,6 @@ static Value *simplifyBinaryIntrinsic(Function *F, Value *Op0, Value *Op1,
           (M1->getOperand(0) == Op0 || M1->getOperand(1) == Op0))
         return Op1;
 
-    // min(X, -Inf) --> -Inf (and commuted variant)
-    // max(X, +Inf) --> +Inf (and commuted variant)
-    bool UseNegInf = IID == Intrinsic::minnum || IID == Intrinsic::minimum;
-    const APFloat *C;
-    if ((match(Op0, m_APFloat(C)) && C->isInfinity() &&
-         C->isNegative() == UseNegInf) ||
-        (match(Op1, m_APFloat(C)) && C->isInfinity() &&
-         C->isNegative() == UseNegInf))
-      return ConstantFP::getInfinity(ReturnType, UseNegInf);
-
-    // TODO: minnum(nnan x, inf) -> x
-    // TODO: minnum(nnan ninf x, flt_max) -> x
-    // TODO: maxnum(nnan x, -inf) -> x
-    // TODO: maxnum(nnan ninf x, -flt_max) -> x
     break;
   }
   default:
@@ -5604,7 +5661,7 @@ Value *llvm::SimplifyCall(CallBase *Call, const SimplifyQuery &Q) {
 /// Given operands for a Freeze, see if we can fold the result.
 static Value *SimplifyFreezeInst(Value *Op0, const SimplifyQuery &Q) {
   // Use a utility function defined in ValueTracking.
-  if (llvm::isGuaranteedNotToBeUndefOrPoison(Op0, Q.CxtI, Q.DT))
+  if (llvm::isGuaranteedNotToBeUndefOrPoison(Op0, Q.AC, Q.CxtI, Q.DT))
     return Op0;
   // We have room for improvement.
   return nullptr;

@@ -750,6 +750,9 @@ bool AMDGPURegisterBankInfo::executeInWaterfallLoop(
 
   for (MachineInstr &MI : Range) {
     for (MachineOperand &Def : MI.defs()) {
+      if (MRI.use_nodbg_empty(Def.getReg()))
+        continue;
+
       LLT ResTy = MRI.getType(Def.getReg());
       const RegisterBank *DefBank = getRegBank(Def.getReg(), MRI, *TRI);
       ResultRegs.push_back(Def.getReg());
@@ -1344,10 +1347,9 @@ static unsigned setBufferOffsets(MachineIRBuilder &B,
 
   Register Base;
   unsigned Offset;
-  MachineInstr *Unused;
 
-  std::tie(Base, Offset, Unused)
-    = AMDGPU::getBaseWithConstantOffset(*MRI, CombinedOffset);
+  std::tie(Base, Offset) =
+      AMDGPU::getBaseWithConstantOffset(*MRI, CombinedOffset);
 
   uint32_t SOffset, ImmOffset;
   if (Offset > 0 && AMDGPU::splitMUBUFOffset(Offset, SOffset, ImmOffset,
@@ -2705,8 +2707,7 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
 
     Register BaseIdxReg;
     unsigned ConstOffset;
-    MachineInstr *OffsetDef;
-    std::tie(BaseIdxReg, ConstOffset, OffsetDef) =
+    std::tie(BaseIdxReg, ConstOffset) =
         AMDGPU::getBaseWithConstantOffset(MRI, MI.getOperand(2).getReg());
 
     // See if the index is an add of a constant which will be foldable by moving
@@ -2837,9 +2838,8 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
 
     Register BaseIdxReg;
     unsigned ConstOffset;
-    MachineInstr *OffsetDef;
-    std::tie(BaseIdxReg, ConstOffset, OffsetDef) =
-      AMDGPU::getBaseWithConstantOffset(MRI, MI.getOperand(3).getReg());
+    std::tie(BaseIdxReg, ConstOffset) =
+        AMDGPU::getBaseWithConstantOffset(MRI, MI.getOperand(3).getReg());
 
     // See if the index is an add of a constant which will be foldable by moving
     // the base register of the index later if this is going to be executed in a
@@ -2971,7 +2971,7 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
   }
   case AMDGPU::G_AMDGPU_BUFFER_ATOMIC_FADD: {
     applyDefaultMapping(OpdMapper);
-    executeInWaterfallLoop(MI, MRI, {1, 4});
+    executeInWaterfallLoop(MI, MRI, {2, 5});
     return;
   }
   case AMDGPU::G_AMDGPU_BUFFER_ATOMIC_CMPSWAP: {
@@ -3048,6 +3048,11 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
     // and VGPR. For now it's too complicated to figure out the final opcode
     // to derive the register bank from the MCInstrDesc.
     applyMappingImage(MI, OpdMapper, MRI, RSrcIntrin->RsrcArg);
+    return;
+  }
+  case AMDGPU::G_AMDGPU_INTRIN_BVH_INTERSECT_RAY: {
+    unsigned N = MI.getNumExplicitOperands() - 2;
+    executeInWaterfallLoop(MI, MRI, { N });
     return;
   }
   case AMDGPU::G_INTRINSIC_W_SIDE_EFFECTS: {
@@ -3929,7 +3934,8 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   case AMDGPU::G_AMDGPU_BUFFER_ATOMIC_OR:
   case AMDGPU::G_AMDGPU_BUFFER_ATOMIC_XOR:
   case AMDGPU::G_AMDGPU_BUFFER_ATOMIC_INC:
-  case AMDGPU::G_AMDGPU_BUFFER_ATOMIC_DEC: {
+  case AMDGPU::G_AMDGPU_BUFFER_ATOMIC_DEC:
+  case AMDGPU::G_AMDGPU_BUFFER_ATOMIC_FADD: {
     // vdata_out
     OpdsMapping[0] = getVGPROpMapping(MI.getOperand(0).getReg(), MRI, *TRI);
 
@@ -3950,23 +3956,6 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
 
     // Any remaining operands are immediates and were correctly null
     // initialized.
-    break;
-  }
-  case AMDGPU::G_AMDGPU_BUFFER_ATOMIC_FADD: {
-    // vdata_in
-    OpdsMapping[0] = getVGPROpMapping(MI.getOperand(0).getReg(), MRI, *TRI);
-
-    // rsrc
-    OpdsMapping[1] = getSGPROpMapping(MI.getOperand(1).getReg(), MRI, *TRI);
-
-    // vindex
-    OpdsMapping[2] = getVGPROpMapping(MI.getOperand(2).getReg(), MRI, *TRI);
-
-    // voffset
-    OpdsMapping[3] = getVGPROpMapping(MI.getOperand(3).getReg(), MRI, *TRI);
-
-    // soffset
-    OpdsMapping[4] = getSGPROpMapping(MI.getOperand(4).getReg(), MRI, *TRI);
     break;
   }
   case AMDGPU::G_AMDGPU_BUFFER_ATOMIC_CMPSWAP: {
@@ -4028,6 +4017,7 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
     case Intrinsic::amdgcn_rsq_legacy:
     case Intrinsic::amdgcn_rsq_clamp:
     case Intrinsic::amdgcn_fmul_legacy:
+    case Intrinsic::amdgcn_fma_legacy:
     case Intrinsic::amdgcn_ldexp:
     case Intrinsic::amdgcn_frexp_mant:
     case Intrinsic::amdgcn_frexp_exp:
@@ -4254,6 +4244,14 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
     // to derive the register bank from the MCInstrDesc.
     assert(RSrcIntrin->IsImage);
     return getImageMapping(MRI, MI, RSrcIntrin->RsrcArg);
+  }
+  case AMDGPU::G_AMDGPU_INTRIN_BVH_INTERSECT_RAY: {
+    unsigned N = MI.getNumExplicitOperands() - 2;
+    OpdsMapping[0] = AMDGPU::getValueMapping(AMDGPU::VGPRRegBankID, 128);
+    OpdsMapping[N] = getSGPROpMapping(MI.getOperand(N).getReg(), MRI, *TRI);
+    for (unsigned I = 2; I < N; ++I)
+      OpdsMapping[I] = AMDGPU::getValueMapping(AMDGPU::VGPRRegBankID, 32);
+    break;
   }
   case AMDGPU::G_INTRINSIC_W_SIDE_EFFECTS: {
     auto IntrID = MI.getIntrinsicID();

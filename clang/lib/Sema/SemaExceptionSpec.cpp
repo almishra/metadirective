@@ -99,9 +99,7 @@ ExprResult Sema::ActOnNoexceptSpec(SourceLocation NoexceptLoc,
 
   llvm::APSInt Result;
   Converted = VerifyIntegerConstantExpression(
-      Converted.get(), &Result,
-      diag::err_noexcept_needs_constant_expression,
-      /*AllowFold*/ false);
+      Converted.get(), &Result, diag::err_noexcept_needs_constant_expression);
   if (!Converted.isInvalid())
     EST = !Result ? EST_NoexceptFalse : EST_NoexceptTrue;
   return Converted;
@@ -1486,7 +1484,6 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
   case Stmt::OMPTeamsDistributeParallelForDirectiveClass:
   case Stmt::OMPTeamsDistributeParallelForSimdDirectiveClass:
   case Stmt::OMPTeamsDistributeSimdDirectiveClass:
-  case Stmt::OMPMetaDirectiveClass:
   case Stmt::ReturnStmtClass:
   case Stmt::SEHExceptStmtClass:
   case Stmt::SEHFinallyStmtClass:

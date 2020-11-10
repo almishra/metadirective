@@ -1082,6 +1082,8 @@ void ASTStmtReader::VisitCastExpr(CastExpr *E) {
   VisitExpr(E);
   unsigned NumBaseSpecs = Record.readInt();
   assert(NumBaseSpecs == E->path_size());
+  unsigned HasFPFeatures = Record.readInt();
+  assert(E->hasStoredFPFeatures() == HasFPFeatures);
   E->setSubExpr(Record.readSubExpr());
   E->setCastKind((CastKind)Record.readInt());
   CastExpr::path_iterator BaseI = E->path_begin();
@@ -1090,6 +1092,9 @@ void ASTStmtReader::VisitCastExpr(CastExpr *E) {
     *BaseSpec = Record.readCXXBaseSpecifier();
     *BaseI++ = BaseSpec;
   }
+  if (HasFPFeatures)
+    *E->getTrailingFPFeatures() =
+        FPOptionsOverride::getFromOpaqueInt(Record.readInt());
 }
 
 void ASTStmtReader::VisitBinaryOperator(BinaryOperator *E) {
@@ -1985,10 +1990,10 @@ ASTStmtReader::VisitDependentScopeDeclRefExpr(DependentScopeDeclRefExpr *E) {
 void
 ASTStmtReader::VisitCXXUnresolvedConstructExpr(CXXUnresolvedConstructExpr *E) {
   VisitExpr(E);
-  assert(Record.peekInt() == E->arg_size() &&
+  assert(Record.peekInt() == E->getNumArgs() &&
          "Read wrong record during creation ?");
   Record.skipInts(1);
-  for (unsigned I = 0, N = E->arg_size(); I != N; ++I)
+  for (unsigned I = 0, N = E->getNumArgs(); I != N; ++I)
     E->setArg(I, Record.readSubExpr());
   E->TSI = readTypeSourceInfo();
   E->setLParenLoc(readSourceLocation());
@@ -2116,7 +2121,8 @@ void ASTStmtReader::VisitSizeOfPackExpr(SizeOfPackExpr *E) {
 void ASTStmtReader::VisitSubstNonTypeTemplateParmExpr(
                                               SubstNonTypeTemplateParmExpr *E) {
   VisitExpr(E);
-  E->Param = readDeclAs<NonTypeTemplateParmDecl>();
+  E->ParamAndRef.setPointer(readDeclAs<NonTypeTemplateParmDecl>());
+  E->ParamAndRef.setInt(Record.readInt());
   E->SubstNonTypeTemplateParmExprBits.NameLoc = readSourceLocation();
   E->Replacement = Record.readSubExpr();
 }
@@ -2181,9 +2187,9 @@ void ASTStmtReader::VisitRecoveryExpr(RecoveryExpr *E) {
   unsigned NumArgs = Record.readInt();
   E->BeginLoc = readSourceLocation();
   E->EndLoc = readSourceLocation();
-  assert(
-      (NumArgs == std::distance(E->children().begin(), E->children().end())) &&
-      "Wrong NumArgs!");
+  assert((NumArgs + 0LL ==
+          std::distance(E->children().begin(), E->children().end())) &&
+         "Wrong NumArgs!");
   (void)NumArgs;
   for (Stmt *&Child : E->children())
     Child = Record.readSubStmt();
@@ -2276,13 +2282,6 @@ void ASTStmtReader::VisitOMPExecutableDirective(OMPExecutableDirective *E) {
 void ASTStmtReader::VisitOMPLoopDirective(OMPLoopDirective *D) {
   VisitStmt(D);
   // Field CollapsedNum was read in ReadStmtFromStream.
-  Record.skipInts(1);
-  VisitOMPExecutableDirective(D);
-}
-
-void ASTStmtReader::VisitOMPMetaDirective(OMPMetaDirective *D) {
-  VisitStmt(D);
-  // The NumClauses field was read in ReadStmtFromStream.
   Record.skipInts(1);
   VisitOMPExecutableDirective(D);
 }
@@ -2900,13 +2899,17 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
       break;
 
     case EXPR_IMPLICIT_CAST:
-      S = ImplicitCastExpr::CreateEmpty(Context,
-                       /*PathSize*/ Record[ASTStmtReader::NumExprFields]);
+      S = ImplicitCastExpr::CreateEmpty(
+          Context,
+          /*PathSize*/ Record[ASTStmtReader::NumExprFields],
+          /*HasFPFeatures*/ Record[ASTStmtReader::NumExprFields + 1]);
       break;
 
     case EXPR_CSTYLE_CAST:
-      S = CStyleCastExpr::CreateEmpty(Context,
-                       /*PathSize*/ Record[ASTStmtReader::NumExprFields]);
+      S = CStyleCastExpr::CreateEmpty(
+          Context,
+          /*PathSize*/ Record[ASTStmtReader::NumExprFields],
+          /*HasFPFeatures*/ Record[ASTStmtReader::NumExprFields + 1]);
       break;
 
     case EXPR_COMPOUND_LITERAL:
@@ -3125,11 +3128,6 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
                                               NestedNameSpecifierLoc(),
                                               DeclarationNameInfo(),
                                               nullptr);
-      break;
-
-    case STMT_OMP_META_DIRECTIVE:
-      S = OMPMetaDirective::CreateEmpty(
-          Context, Record[ASTStmtReader::NumStmtFields], Empty);
       break;
 
     case STMT_OMP_PARALLEL_DIRECTIVE:
@@ -3513,8 +3511,10 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
       break;
 
     case EXPR_CXX_STATIC_CAST:
-      S = CXXStaticCastExpr::CreateEmpty(Context,
-                       /*PathSize*/ Record[ASTStmtReader::NumExprFields]);
+      S = CXXStaticCastExpr::CreateEmpty(
+          Context,
+          /*PathSize*/ Record[ASTStmtReader::NumExprFields],
+          /*HasFPFeatures*/ Record[ASTStmtReader::NumExprFields + 1]);
       break;
 
     case EXPR_CXX_DYNAMIC_CAST:
@@ -3536,8 +3536,10 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
       break;
 
     case EXPR_CXX_FUNCTIONAL_CAST:
-      S = CXXFunctionalCastExpr::CreateEmpty(Context,
-                       /*PathSize*/ Record[ASTStmtReader::NumExprFields]);
+      S = CXXFunctionalCastExpr::CreateEmpty(
+          Context,
+          /*PathSize*/ Record[ASTStmtReader::NumExprFields],
+          /*HasFPFeatures*/ Record[ASTStmtReader::NumExprFields + 1]);
       break;
 
     case EXPR_BUILTIN_BIT_CAST:

@@ -11,10 +11,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/APValue.h"
+#include "Linkage.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/AST/Type.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -38,7 +40,7 @@ static_assert(
     "Type is insufficiently aligned");
 
 APValue::LValueBase::LValueBase(const ValueDecl *P, unsigned I, unsigned V)
-    : Ptr(P), Local{I, V} {}
+    : Ptr(P ? cast<ValueDecl>(P->getCanonicalDecl()) : nullptr), Local{I, V} {}
 APValue::LValueBase::LValueBase(const Expr *P, unsigned I, unsigned V)
     : Ptr(P), Local{I, V} {}
 
@@ -77,16 +79,34 @@ QualType APValue::LValueBase::getDynamicAllocType() const {
   return QualType::getFromOpaquePtr(DynamicAllocType);
 }
 
+void APValue::LValueBase::Profile(llvm::FoldingSetNodeID &ID) const {
+  ID.AddPointer(Ptr.getOpaqueValue());
+  if (is<TypeInfoLValue>() || is<DynamicAllocLValue>())
+    return;
+  ID.AddInteger(Local.CallIndex);
+  ID.AddInteger(Local.Version);
+}
+
 namespace clang {
 bool operator==(const APValue::LValueBase &LHS,
                 const APValue::LValueBase &RHS) {
   if (LHS.Ptr != RHS.Ptr)
     return false;
-  if (LHS.is<TypeInfoLValue>())
+  if (LHS.is<TypeInfoLValue>() || LHS.is<DynamicAllocLValue>())
     return true;
   return LHS.Local.CallIndex == RHS.Local.CallIndex &&
          LHS.Local.Version == RHS.Local.Version;
 }
+}
+
+APValue::LValuePathEntry::LValuePathEntry(BaseOrMemberType BaseOrMember) {
+  if (const Decl *D = BaseOrMember.getPointer())
+    BaseOrMember.setPointer(D->getCanonicalDecl());
+  Value = reinterpret_cast<uintptr_t>(BaseOrMember.getOpaqueValue());
+}
+
+void APValue::LValuePathEntry::Profile(llvm::FoldingSetNodeID &ID) const {
+  ID.AddInteger(Value);
 }
 
 namespace {
@@ -113,14 +133,16 @@ APValue::LValueBase::operator bool () const {
 
 clang::APValue::LValueBase
 llvm::DenseMapInfo<clang::APValue::LValueBase>::getEmptyKey() {
-  return clang::APValue::LValueBase(
-      DenseMapInfo<const ValueDecl*>::getEmptyKey());
+  clang::APValue::LValueBase B;
+  B.Ptr = DenseMapInfo<const ValueDecl*>::getEmptyKey();
+  return B;
 }
 
 clang::APValue::LValueBase
 llvm::DenseMapInfo<clang::APValue::LValueBase>::getTombstoneKey() {
-  return clang::APValue::LValueBase(
-      DenseMapInfo<const ValueDecl*>::getTombstoneKey());
+  clang::APValue::LValueBase B;
+  B.Ptr = DenseMapInfo<const ValueDecl*>::getTombstoneKey();
+  return B;
 }
 
 namespace clang {
@@ -392,6 +414,155 @@ bool APValue::needsCleanup() const {
 void APValue::swap(APValue &RHS) {
   std::swap(Kind, RHS.Kind);
   std::swap(Data, RHS.Data);
+}
+
+/// Profile the value of an APInt, excluding its bit-width.
+static void profileIntValue(llvm::FoldingSetNodeID &ID, const llvm::APInt &V) {
+  for (unsigned I = 0, N = V.getBitWidth(); I < N; I += 32)
+    ID.AddInteger((uint32_t)V.extractBitsAsZExtValue(std::min(32u, N - I), I));
+}
+
+void APValue::Profile(llvm::FoldingSetNodeID &ID) const {
+  // Note that our profiling assumes that only APValues of the same type are
+  // ever compared. As a result, we don't consider collisions that could only
+  // happen if the types are different. (For example, structs with different
+  // numbers of members could profile the same.)
+
+  ID.AddInteger(Kind);
+
+  switch (Kind) {
+  case None:
+  case Indeterminate:
+    return;
+
+  case AddrLabelDiff:
+    ID.AddPointer(getAddrLabelDiffLHS()->getLabel()->getCanonicalDecl());
+    ID.AddPointer(getAddrLabelDiffRHS()->getLabel()->getCanonicalDecl());
+    return;
+
+  case Struct:
+    for (unsigned I = 0, N = getStructNumBases(); I != N; ++I)
+      getStructBase(I).Profile(ID);
+    for (unsigned I = 0, N = getStructNumFields(); I != N; ++I)
+      getStructField(I).Profile(ID);
+    return;
+
+  case Union:
+    if (!getUnionField()) {
+      ID.AddInteger(0);
+      return;
+    }
+    ID.AddInteger(getUnionField()->getFieldIndex() + 1);
+    getUnionValue().Profile(ID);
+    return;
+
+  case Array: {
+    if (getArraySize() == 0)
+      return;
+
+    // The profile should not depend on whether the array is expanded or
+    // not, but we don't want to profile the array filler many times for
+    // a large array. So treat all equal trailing elements as the filler.
+    // Elements are profiled in reverse order to support this, and the
+    // first profiled element is followed by a count. For example:
+    //
+    //   ['a', 'c', 'x', 'x', 'x'] is profiled as
+    //   [5, 'x', 3, 'c', 'a']
+    llvm::FoldingSetNodeID FillerID;
+    (hasArrayFiller() ? getArrayFiller()
+                      : getArrayInitializedElt(getArrayInitializedElts() - 1))
+        .Profile(FillerID);
+    ID.AddNodeID(FillerID);
+    unsigned NumFillers = getArraySize() - getArrayInitializedElts();
+    unsigned N = getArrayInitializedElts();
+
+    // Count the number of elements equal to the last one. This loop ends
+    // by adding an integer indicating the number of such elements, with
+    // N set to the number of elements left to profile.
+    while (true) {
+      if (N == 0) {
+        // All elements are fillers.
+        assert(NumFillers == getArraySize());
+        ID.AddInteger(NumFillers);
+        break;
+      }
+
+      // No need to check if the last element is equal to the last
+      // element.
+      if (N != getArraySize()) {
+        llvm::FoldingSetNodeID ElemID;
+        getArrayInitializedElt(N - 1).Profile(ElemID);
+        if (ElemID != FillerID) {
+          ID.AddInteger(NumFillers);
+          ID.AddNodeID(ElemID);
+          --N;
+          break;
+        }
+      }
+
+      // This is a filler.
+      ++NumFillers;
+      --N;
+    }
+
+    // Emit the remaining elements.
+    for (; N != 0; --N)
+      getArrayInitializedElt(N - 1).Profile(ID);
+    return;
+  }
+
+  case Vector:
+    for (unsigned I = 0, N = getVectorLength(); I != N; ++I)
+      getVectorElt(I).Profile(ID);
+    return;
+
+  case Int:
+    profileIntValue(ID, getInt());
+    return;
+
+  case Float:
+    profileIntValue(ID, getFloat().bitcastToAPInt());
+    return;
+
+  case FixedPoint:
+    profileIntValue(ID, getFixedPoint().getValue());
+    return;
+
+  case ComplexFloat:
+    profileIntValue(ID, getComplexFloatReal().bitcastToAPInt());
+    profileIntValue(ID, getComplexFloatImag().bitcastToAPInt());
+    return;
+
+  case ComplexInt:
+    profileIntValue(ID, getComplexIntReal());
+    profileIntValue(ID, getComplexIntImag());
+    return;
+
+  case LValue:
+    getLValueBase().Profile(ID);
+    ID.AddInteger(getLValueOffset().getQuantity());
+    ID.AddInteger((isNullPointer() ? 1 : 0) |
+                  (isLValueOnePastTheEnd() ? 2 : 0) |
+                  (hasLValuePath() ? 4 : 0));
+    if (hasLValuePath()) {
+      ID.AddInteger(getLValuePath().size());
+      // For uniqueness, we only need to profile the entries corresponding
+      // to union members, but we don't have the type here so we don't know
+      // how to interpret the entries.
+      for (LValuePathEntry E : getLValuePath())
+        E.Profile(ID);
+    }
+    return;
+
+  case MemberPointer:
+    ID.AddPointer(getMemberPointerDecl());
+    ID.AddInteger(isMemberPointerToDerivedMember());
+    for (const CXXRecordDecl *D : getMemberPointerPath())
+      ID.AddPointer(D);
+    return;
+  }
+
+  llvm_unreachable("Unknown APValue kind!");
 }
 
 static double GetApproxValue(const llvm::APFloat &F) {
@@ -721,17 +892,33 @@ void APValue::setLValue(LValueBase B, const CharUnits &O, NoLValuePath,
   LVal.IsNullPtr = IsNullPtr;
 }
 
-void APValue::setLValue(LValueBase B, const CharUnits &O,
-                        ArrayRef<LValuePathEntry> Path, bool IsOnePastTheEnd,
-                        bool IsNullPtr) {
+MutableArrayRef<APValue::LValuePathEntry>
+APValue::setLValueUninit(LValueBase B, const CharUnits &O, unsigned Size,
+                         bool IsOnePastTheEnd, bool IsNullPtr) {
   assert(isLValue() && "Invalid accessor");
-  LV &LVal = *((LV*)(char*)Data.buffer);
+  LV &LVal = *((LV *)(char *)Data.buffer);
   LVal.Base = B;
   LVal.IsOnePastTheEnd = IsOnePastTheEnd;
   LVal.Offset = O;
-  LVal.resizePath(Path.size());
-  memcpy(LVal.getPath(), Path.data(), Path.size() * sizeof(LValuePathEntry));
   LVal.IsNullPtr = IsNullPtr;
+  LVal.resizePath(Size);
+  return {LVal.getPath(), Size};
+}
+
+void APValue::setLValue(LValueBase B, const CharUnits &O,
+                        ArrayRef<LValuePathEntry> Path, bool IsOnePastTheEnd,
+                        bool IsNullPtr) {
+  MutableArrayRef<APValue::LValuePathEntry> InternalPath =
+      setLValueUninit(B, O, Path.size(), IsOnePastTheEnd, IsNullPtr);
+  memcpy(InternalPath.data(), Path.data(),
+         Path.size() * sizeof(LValuePathEntry));
+}
+
+void APValue::setUnion(const FieldDecl *Field, const APValue &Value) {
+  assert(isUnion() && "Invalid accessor");
+  ((UnionData *)(char *)Data.buffer)->Field =
+      Field ? Field->getCanonicalDecl() : nullptr;
+  *((UnionData*)(char*)Data.buffer)->Value = Value;
 }
 
 const ValueDecl *APValue::getMemberPointerDecl() const {
@@ -768,13 +955,123 @@ void APValue::MakeArray(unsigned InitElts, unsigned Size) {
   Kind = Array;
 }
 
-void APValue::MakeMemberPointer(const ValueDecl *Member, bool IsDerivedMember,
-                                ArrayRef<const CXXRecordDecl*> Path) {
+MutableArrayRef<APValue::LValuePathEntry>
+setLValueUninit(APValue::LValueBase B, const CharUnits &O, unsigned Size,
+                bool OnePastTheEnd, bool IsNullPtr);
+
+MutableArrayRef<const CXXRecordDecl *>
+APValue::setMemberPointerUninit(const ValueDecl *Member, bool IsDerivedMember,
+                                unsigned Size) {
   assert(isAbsent() && "Bad state change");
-  MemberPointerData *MPD = new ((void*)(char*)Data.buffer) MemberPointerData;
+  MemberPointerData *MPD = new ((void *)(char *)Data.buffer) MemberPointerData;
   Kind = MemberPointer;
-  MPD->MemberAndIsDerivedMember.setPointer(Member);
+  MPD->MemberAndIsDerivedMember.setPointer(
+      Member ? cast<ValueDecl>(Member->getCanonicalDecl()) : nullptr);
   MPD->MemberAndIsDerivedMember.setInt(IsDerivedMember);
-  MPD->resizePath(Path.size());
-  memcpy(MPD->getPath(), Path.data(), Path.size()*sizeof(const CXXRecordDecl*));
+  MPD->resizePath(Size);
+  return {MPD->getPath(), MPD->PathLength};
+}
+
+void APValue::MakeMemberPointer(const ValueDecl *Member, bool IsDerivedMember,
+                                ArrayRef<const CXXRecordDecl *> Path) {
+  MutableArrayRef<const CXXRecordDecl *> InternalPath =
+      setMemberPointerUninit(Member, IsDerivedMember, Path.size());
+  for (unsigned I = 0; I != Path.size(); ++I)
+    InternalPath[I] = Path[I]->getCanonicalDecl();
+}
+
+LinkageInfo LinkageComputer::getLVForValue(const APValue &V,
+                                           LVComputationKind computation) {
+  LinkageInfo LV = LinkageInfo::external();
+
+  auto MergeLV = [&](LinkageInfo MergeLV) {
+    LV.merge(MergeLV);
+    return LV.getLinkage() == InternalLinkage;
+  };
+  auto Merge = [&](const APValue &V) {
+    return MergeLV(getLVForValue(V, computation));
+  };
+
+  switch (V.getKind()) {
+  case APValue::None:
+  case APValue::Indeterminate:
+  case APValue::Int:
+  case APValue::Float:
+  case APValue::FixedPoint:
+  case APValue::ComplexInt:
+  case APValue::ComplexFloat:
+  case APValue::Vector:
+    break;
+
+  case APValue::AddrLabelDiff:
+    // Even for an inline function, it's not reasonable to treat a difference
+    // between the addresses of labels as an external value.
+    return LinkageInfo::internal();
+
+  case APValue::Struct: {
+    for (unsigned I = 0, N = V.getStructNumBases(); I != N; ++I)
+      if (Merge(V.getStructBase(I)))
+        break;
+    for (unsigned I = 0, N = V.getStructNumFields(); I != N; ++I)
+      if (Merge(V.getStructField(I)))
+        break;
+    break;
+  }
+
+  case APValue::Union:
+    if (const auto *FD = V.getUnionField())
+      Merge(V.getUnionValue());
+    break;
+
+  case APValue::Array: {
+    for (unsigned I = 0, N = V.getArrayInitializedElts(); I != N; ++I)
+      if (Merge(V.getArrayInitializedElt(I)))
+        break;
+    if (V.hasArrayFiller())
+      Merge(V.getArrayFiller());
+    break;
+  }
+
+  case APValue::LValue: {
+    if (!V.getLValueBase()) {
+      // Null or absolute address: this is external.
+    } else if (const auto *VD =
+                   V.getLValueBase().dyn_cast<const ValueDecl *>()) {
+      if (VD && MergeLV(getLVForDecl(VD, computation)))
+        break;
+    } else if (const auto TI = V.getLValueBase().dyn_cast<TypeInfoLValue>()) {
+      if (MergeLV(getLVForType(*TI.getType(), computation)))
+        break;
+    } else if (const Expr *E = V.getLValueBase().dyn_cast<const Expr *>()) {
+      // Almost all expression bases are internal. The exception is
+      // lifetime-extended temporaries.
+      // FIXME: These should be modeled as having the
+      // LifetimeExtendedTemporaryDecl itself as the base.
+      // FIXME: If we permit Objective-C object literals in template arguments,
+      // they should not imply internal linkage.
+      auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E);
+      if (!MTE || MTE->getStorageDuration() == SD_FullExpression)
+        return LinkageInfo::internal();
+      if (MergeLV(getLVForDecl(MTE->getExtendingDecl(), computation)))
+        break;
+    } else {
+      assert(V.getLValueBase().is<DynamicAllocLValue>() &&
+             "unexpected LValueBase kind");
+      return LinkageInfo::internal();
+    }
+    // The lvalue path doesn't matter: pointers to all subobjects always have
+    // the same visibility as pointers to the complete object.
+    break;
+  }
+
+  case APValue::MemberPointer:
+    if (const NamedDecl *D = V.getMemberPointerDecl())
+      MergeLV(getLVForDecl(D, computation));
+    // Note that we could have a base-to-derived conversion here to a member of
+    // a derived class with less linkage/visibility. That's covered by the
+    // linkage and visibility of the value's type.
+    break;
+  }
+
+  return LV;
 }

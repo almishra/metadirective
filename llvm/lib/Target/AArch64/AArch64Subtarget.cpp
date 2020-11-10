@@ -103,6 +103,7 @@ void AArch64Subtarget::initializeProperties() {
   case CortexA76:
   case CortexA77:
   case CortexA78:
+  case CortexR82:
   case CortexX1:
     PrefFunctionLogAlignment = 4;
     break;
@@ -150,6 +151,7 @@ void AArch64Subtarget::initializeProperties() {
     PrefFunctionLogAlignment = 3;
     break;
   case NeoverseN1:
+  case NeoverseV1:
     PrefFunctionLogAlignment = 4;
     break;
   case Saphira:

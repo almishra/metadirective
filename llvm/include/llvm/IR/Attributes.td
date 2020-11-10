@@ -1,3 +1,15 @@
+//===- Attributes.td - Defines all LLVM attributes ---------*- tablegen -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file defines all the LLVM attributes.
+//
+//===----------------------------------------------------------------------===//
+
 /// Attribute base class.
 class Attr<string S> {
   // String representation of this attribute in the IR.
@@ -179,6 +191,9 @@ def StackAlignment : IntAttr<"alignstack">;
 /// Function can be speculated.
 def Speculatable : EnumAttr<"speculatable">;
 
+/// Stack protection explicitly disabled.
+def NoStackProtect : EnumAttr<"nossp">;
+
 /// Stack protection.
 def StackProtect : EnumAttr<"ssp">;
 
@@ -192,7 +207,7 @@ def StackProtectStrong : EnumAttr<"sspstrong">;
 def StrictFP : EnumAttr<"strictfp">;
 
 /// Hidden pointer to structure to return.
-def StructRet : EnumAttr<"sret">;
+def StructRet : TypeAttr<"sret">;
 
 /// AddressSanitizer is on.
 def SanitizeAddress : EnumAttr<"sanitize_address">;
@@ -234,6 +249,9 @@ def WriteOnly : EnumAttr<"writeonly">;
 
 /// Zero extended before/after call.
 def ZExt : EnumAttr<"zeroext">;
+
+/// Function is required to make Forward Progress.
+def MustProgress : TypeAttr<"mustprogress">;
 
 /// Target-independent string attributes.
 def LessPreciseFPMAD : StrBoolAttr<"less-precise-fpmad">;
@@ -288,3 +306,4 @@ def : MergeRule<"adjustCallerStackProbes">;
 def : MergeRule<"adjustCallerStackProbeSize">;
 def : MergeRule<"adjustMinLegalVectorWidth">;
 def : MergeRule<"adjustNullPointerValidAttr">;
+def : MergeRule<"setAND<MustProgressAttr>">;

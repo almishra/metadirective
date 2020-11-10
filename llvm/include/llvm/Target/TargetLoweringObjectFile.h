@@ -118,6 +118,10 @@ public:
 
   virtual MCSection *getSectionForJumpTable(const Function &F,
                                             const TargetMachine &TM) const;
+  virtual MCSection *getSectionForLSDA(const Function &F,
+                                       const TargetMachine &TM) const {
+    return LSDASection;
+  }
 
   virtual bool shouldPutJumpTableInFunctionSection(bool UsesLabelDifference,
                                                    const Function &F) const;
@@ -202,12 +206,6 @@ public:
                                                   MCStreamer &Streamer) const {
     return nullptr;
   }
-
-  virtual void emitLinkerFlagsForGlobal(raw_ostream &OS,
-                                        const GlobalValue *GV) const {}
-
-  virtual void emitLinkerFlagsForUsed(raw_ostream &OS,
-                                      const GlobalValue *GV) const {}
 
   /// If supported, return the section to use for the llvm.commandline
   /// metadata. Otherwise, return nullptr.
