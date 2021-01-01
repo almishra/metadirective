@@ -2176,6 +2176,13 @@ void ASTStmtWriter::VisitOMPExecutableDirective(OMPExecutableDirective *E) {
   Record.AddSourceLocation(E->getEndLoc());
 }
 
+void ASTStmtWriter::VisitOMPMetaDirective(OMPMetaDirective *D) {
+  VisitStmt(D);
+  Record.push_back(D->getNumClauses());
+  VisitOMPExecutableDirective(D);
+  Code = serialization::STMT_OMP_META_DIRECTIVE;
+}
+
 void ASTStmtWriter::VisitOMPLoopDirective(OMPLoopDirective *D) {
   VisitStmt(D);
   Record.writeUInt32(D->getCollapsedNumber());
