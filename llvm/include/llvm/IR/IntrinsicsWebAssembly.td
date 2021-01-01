@@ -79,22 +79,23 @@ def int_wasm_lsda : Intrinsic<[llvm_ptr_ty], [], [IntrNoMem]>;
 //===----------------------------------------------------------------------===//
 
 // wait / notify
-def int_wasm_atomic_wait_i32 :
+def int_wasm_memory_atomic_wait32 :
   Intrinsic<[llvm_i32_ty],
             [LLVMPointerType<llvm_i32_ty>, llvm_i32_ty, llvm_i64_ty],
-            [IntrInaccessibleMemOrArgMemOnly, ReadOnly<ArgIndex<0>>, NoCapture<ArgIndex<0>>,
-             IntrHasSideEffects],
-             "", [SDNPMemOperand]>;
-def int_wasm_atomic_wait_i64 :
+            [IntrInaccessibleMemOrArgMemOnly, ReadOnly<ArgIndex<0>>,
+             NoCapture<ArgIndex<0>>, IntrHasSideEffects],
+            "", [SDNPMemOperand]>;
+def int_wasm_memory_atomic_wait64 :
   Intrinsic<[llvm_i32_ty],
             [LLVMPointerType<llvm_i64_ty>, llvm_i64_ty, llvm_i64_ty],
-            [IntrInaccessibleMemOrArgMemOnly, ReadOnly<ArgIndex<0>>, NoCapture<ArgIndex<0>>,
-             IntrHasSideEffects],
-             "", [SDNPMemOperand]>;
-def int_wasm_atomic_notify:
+            [IntrInaccessibleMemOrArgMemOnly, ReadOnly<ArgIndex<0>>,
+             NoCapture<ArgIndex<0>>, IntrHasSideEffects],
+            "", [SDNPMemOperand]>;
+def int_wasm_memory_atomic_notify:
   Intrinsic<[llvm_i32_ty], [LLVMPointerType<llvm_i32_ty>, llvm_i32_ty],
-            [IntrInaccessibleMemOnly, NoCapture<ArgIndex<0>>, IntrHasSideEffects], "",
-            [SDNPMemOperand]>;
+            [IntrInaccessibleMemOnly, NoCapture<ArgIndex<0>>,
+             IntrHasSideEffects],
+            "", [SDNPMemOperand]>;
 
 //===----------------------------------------------------------------------===//
 // SIMD intrinsics
@@ -287,6 +288,15 @@ def int_wasm_extmul_low_unsigned :
 def int_wasm_extmul_high_unsigned :
   Intrinsic<[llvm_anyvector_ty],
             [LLVMSubdivide2VectorType<0>, LLVMSubdivide2VectorType<0>],
+            [IntrNoMem, IntrSpeculatable]>;
+
+def int_wasm_extadd_pairwise_signed :
+  Intrinsic<[llvm_anyvector_ty],
+            [LLVMSubdivide2VectorType<0>],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_extadd_pairwise_unsigned :
+  Intrinsic<[llvm_anyvector_ty],
+            [LLVMSubdivide2VectorType<0>],
             [IntrNoMem, IntrSpeculatable]>;
 
 def int_wasm_signselect :

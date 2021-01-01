@@ -731,10 +731,11 @@ public:
 #define ABSTRACT_STMT(Stmt)
 #include "clang/AST/StmtNodes.inc"
 
-#define OMP_CLAUSE_CLASS(Enum, Str, Class)                                           \
-  LLVM_ATTRIBUTE_NOINLINE \
-  OMPClause *Transform ## Class(Class *S);
-#include "llvm/Frontend/OpenMP/OMPKinds.def"
+#define GEN_CLANG_CLAUSE_CLASS
+#define CLAUSE_CLASS(Enum, Str, Class)                                         \
+  LLVM_ATTRIBUTE_NOINLINE                                                      \
+  OMPClause *Transform##Class(Class *S);
+#include "llvm/Frontend/OpenMP/OMP.inc"
 
   /// Build a new qualified type given its unqualified type and type location.
   ///
@@ -1636,18 +1637,6 @@ public:
                                       SourceLocation EndLoc) {
     return getSema().ActOnOpenMPCollapseClause(Num, StartLoc, LParenLoc,
                                                EndLoc);
-  }
-
-  /// Build a new OpenMP 'when' clause.
-  ///
-  /// By default, performs semantic analysis to build the new OpenMP clause.
-  /// Subclasses may override this routine to provide different behavior.
-  OMPClause *RebuildOMPWhenClause(OMPTraitInfo &TI, OpenMPDirectiveKind DKind,
-                                  Stmt *Directive, SourceLocation StartLoc,
-                                  SourceLocation LParenLoc,
-                                  SourceLocation EndLoc) {
-    return getSema().ActOnOpenMPWhenClause(TI, DKind, Directive, StartLoc,
-                                           LParenLoc, EndLoc);
   }
 
   /// Build a new OpenMP 'default' clause.
@@ -3703,10 +3692,11 @@ OMPClause *TreeTransform<Derived>::TransformOMPClause(OMPClause *S) {
   switch (S->getClauseKind()) {
   default: break;
   // Transform individual clause nodes
-#define OMP_CLAUSE_CLASS(Enum, Str, Class) \
+#define GEN_CLANG_CLAUSE_CLASS
+#define CLAUSE_CLASS(Enum, Str, Class)                                         \
   case Enum:                                                                   \
-    return getDerived().Transform ## Class(cast<Class>(S));
-#include "llvm/Frontend/OpenMP/OMPKinds.def"
+    return getDerived().Transform##Class(cast<Class>(S));
+#include "llvm/Frontend/OpenMP/OMP.inc"
   }
 
   return S;
@@ -8391,17 +8381,6 @@ StmtResult TreeTransform<Derived>::TransformOMPExecutableDirective(
 
 template <typename Derived>
 StmtResult
-TreeTransform<Derived>::TransformOMPMetaDirective(OMPMetaDirective *D) {
-  DeclarationNameInfo DirName;
-  getDerived().getSema().StartOpenMPDSABlock(OMPD_metadirective, DirName,
-                                             nullptr, D->getBeginLoc());
-  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
-  getDerived().getSema().EndOpenMPDSABlock(Res.get());
-  return Res;
-}
-
-template <typename Derived>
-StmtResult
 TreeTransform<Derived>::TransformOMPParallelDirective(OMPParallelDirective *D) {
   DeclarationNameInfo DirName;
   getDerived().getSema().StartOpenMPDSABlock(OMPD_parallel, DirName, nullptr,
@@ -9072,13 +9051,6 @@ TreeTransform<Derived>::TransformOMPCollapseClause(OMPCollapseClause *C) {
     return nullptr;
   return getDerived().RebuildOMPCollapseClause(
       E.get(), C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc());
-}
-
-template <typename Derived>
-OMPClause *TreeTransform<Derived>::TransformOMPWhenClause(OMPWhenClause *C) {
-  return getDerived().RebuildOMPWhenClause(C->getTI(), C->getDKind(),
-                                           C->getDirective(), C->getBeginLoc(),
-                                           C->getLParenLoc(), C->getEndLoc());
 }
 
 template <typename Derived>

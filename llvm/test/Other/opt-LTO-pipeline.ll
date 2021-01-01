@@ -128,9 +128,17 @@
 ; CHECK-NEXT:         Induction Variable Simplification
 ; CHECK-NEXT:         Delete dead loops
 ; CHECK-NEXT:         Unroll loops
+; CHECK-NEXT:       Loop Access Analysis
+; CHECK-NEXT:       Lazy Branch Probability Analysis
+; CHECK-NEXT:       Lazy Block Frequency Analysis
+; CHECK-NEXT:       Optimization Remark Emitter
+; CHECK-NEXT:       Loop Distribution
 ; CHECK-NEXT:       Post-Dominator Tree Construction
 ; CHECK-NEXT:       Branch Probability Analysis
 ; CHECK-NEXT:       Block Frequency Analysis
+; CHECK-NEXT:       Scalar Evolution Analysis
+; CHECK-NEXT:       Basic Alias Analysis (stateless AA impl)
+; CHECK-NEXT:       Function Alias Analysis Results
 ; CHECK-NEXT:       Loop Access Analysis
 ; CHECK-NEXT:       Demanded bits analysis
 ; CHECK-NEXT:       Lazy Branch Probability Analysis
@@ -178,6 +186,7 @@
 ; CHECK-NEXT:     Eliminate Available Externally Globals
 ; CHECK-NEXT:     Dead Global Elimination
 ; CHECK-NEXT:     FunctionPass Manager
+; CHECK-NEXT:       Annotation Remarks
 ; CHECK-NEXT:       Module Verifier
 ; CHECK-NEXT:     Bitcode Writer
 ; CHECK-NEXT: Pass Arguments:

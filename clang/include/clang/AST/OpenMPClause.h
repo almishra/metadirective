@@ -7758,22 +7758,22 @@ public:
 #define DISPATCH(CLASS) \
   return static_cast<ImplClass*>(this)->Visit##CLASS(static_cast<PTR(CLASS)>(S))
 
-#define OMP_CLAUSE_CLASS(Enum, Str, Class) \
-  RetTy Visit ## Class (PTR(Class) S) { DISPATCH(Class); }
-#include "llvm/Frontend/OpenMP/OMPKinds.def"
+#define GEN_CLANG_CLAUSE_CLASS
+#define CLAUSE_CLASS(Enum, Str, Class)                                         \
+  RetTy Visit##Class(PTR(Class) S) { DISPATCH(Class); }
+#include "llvm/Frontend/OpenMP/OMP.inc"
 
   RetTy Visit(PTR(OMPClause) S) {
     // Top switch clause: visit each OMPClause.
     switch (S->getClauseKind()) {
-#define OMP_CLAUSE_CLASS(Enum, Str, Class)                                     \
+#define GEN_CLANG_CLAUSE_CLASS
+#define CLAUSE_CLASS(Enum, Str, Class)                                         \
   case llvm::omp::Clause::Enum:                                                \
     return Visit##Class(static_cast<PTR(Class)>(S));
-#define OMP_CLAUSE_NO_CLASS(Enum, Str)                                         \
+#define CLAUSE_NO_CLASS(Enum, Str)                                             \
   case llvm::omp::Clause::Enum:                                                \
     break;
-#include "llvm/Frontend/OpenMP/OMPKinds.def"
-    default:
-      break;
+#include "llvm/Frontend/OpenMP/OMP.inc"
     }
   }
   // Base case, ignore it. :)
@@ -7804,9 +7804,9 @@ public:
   OMPClausePrinter(raw_ostream &OS, const PrintingPolicy &Policy)
       : OS(OS), Policy(Policy) {}
 
-#define OMP_CLAUSE_CLASS(Enum, Str, Class)                                     \
-  void Visit##Class(Class *S);
-#include "llvm/Frontend/OpenMP/OMPKinds.def"
+#define GEN_CLANG_CLAUSE_CLASS
+#define CLAUSE_CLASS(Enum, Str, Class) void Visit##Class(Class *S);
+#include "llvm/Frontend/OpenMP/OMP.inc"
 };
 
 struct OMPTraitProperty {
@@ -7888,75 +7888,6 @@ public:
 };
 llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const OMPTraitInfo &TI);
 llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const OMPTraitInfo *TI);
-
-/// This represents 'when' clause in the '#pragma omp ...' directive
-///
-/// \code
-/// #pragma omp metadirective when(user={condition(N<10)}: parallel)
-/// \endcode
-/// In this example directive '#pragma omp metadirective' has simple 'when'
-/// clause with user defined condition.
-class OMPWhenClause final : public OMPClause {
-  friend class OMPClauseReader;
-
-  OMPTraitInfo *TI;
-  OpenMPDirectiveKind DKind;
-  Stmt *Directive;
-
-  /// Location of '('.
-  SourceLocation LParenLoc;
-
-public:
-  /// Build 'when' clause with argument \a A ('none' or 'shared').
-  ///
-  /// \param T TraitInfor containing information about the context selector
-  /// \param DKind The directive associated with the when clause
-  /// \param D The statement associated with the when clause
-  /// \param StartLoc Starting location of the clause.
-  /// \param LParenLoc Location of '('.
-  /// \param EndLoc Ending location of the clause.
-  OMPWhenClause(OMPTraitInfo &T, OpenMPDirectiveKind dKind, Stmt *D,
-                SourceLocation StartLoc, SourceLocation LParenLoc,
-                SourceLocation EndLoc)
-      : OMPClause(llvm::omp::OMPC_when, StartLoc, EndLoc), TI(&T), DKind(dKind),
-        Directive(D), LParenLoc(LParenLoc) {}
-
-  /// Build an empty clause.
-  OMPWhenClause()
-      : OMPClause(llvm::omp::OMPC_when, SourceLocation(), SourceLocation()) {}
-
-  /// Sets the location of '('.
-  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
-
-  /// Returns the location of '('.
-  SourceLocation getLParenLoc() const { return LParenLoc; }
-
-  /// Returns the directive variant kind
-  OpenMPDirectiveKind getDKind() { return DKind; }
-
-  Stmt *getDirective() const { return Directive; }
-
-  /// Returns the OMPTraitInfo
-  OMPTraitInfo &getTI() { return *TI; }
-
-  child_range children() {
-    return child_range(child_iterator(), child_iterator());
-  }
-
-  const_child_range children() const {
-    return const_child_range(const_child_iterator(), const_child_iterator());
-  }
-  child_range used_children() {
-    return child_range(child_iterator(), child_iterator());
-  }
-  const_child_range used_children() const {
-    return const_child_range(const_child_iterator(), const_child_iterator());
-  }
-
-  static bool classof(const OMPClause *T) {
-    return T->getClauseKind() == llvm::omp::OMPC_when;
-  }
-};
 
 /// Clang specific specialization of the OMPContext to lookup target features.
 struct TargetOMPContext final : public llvm::omp::OMPContext {

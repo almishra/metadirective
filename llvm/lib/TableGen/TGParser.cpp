@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <limits>
 
 using namespace llvm;
 
@@ -799,8 +800,8 @@ bool TGParser::ParseOptionalBitList(SmallVectorImpl<unsigned> &Ranges) {
 RecTy *TGParser::ParseType() {
   switch (Lex.getCode()) {
   default: TokError("Unknown token when expecting a type"); return nullptr;
-  case tgtok::String: Lex.Lex(); return StringRecTy::get();
-  case tgtok::Code:   Lex.Lex(); return CodeRecTy::get();
+  case tgtok::String:
+  case tgtok::Code:   Lex.Lex(); return StringRecTy::get();
   case tgtok::Bit:    Lex.Lex(); return BitRecTy::get();
   case tgtok::Int:    Lex.Lex(); return IntRecTy::get();
   case tgtok::Dag:    Lex.Lex(); return DagRecTy::get();
@@ -1148,15 +1149,12 @@ Init *TGParser::ParseOperation(Record *CurRec, RecTy *ItemType) {
       break;
     case tgtok::XEq:
     case tgtok::XNe:
-      Type = BitRecTy::get();
-      // ArgType for Eq / Ne is not known at this point
-      break;
     case tgtok::XLe:
     case tgtok::XLt:
     case tgtok::XGe:
     case tgtok::XGt:
       Type = BitRecTy::get();
-      ArgType = IntRecTy::get();
+      // ArgType for the comparison operators is not yet known.
       break;
     case tgtok::XListConcat:
       // We don't know the list type until we parse the first argument
@@ -1245,9 +1243,23 @@ Init *TGParser::ParseOperation(Record *CurRec, RecTy *ItemType) {
         case BinOpInit::EQ:
         case BinOpInit::NE:
           if (!ArgType->typeIsConvertibleTo(IntRecTy::get()) &&
+              !ArgType->typeIsConvertibleTo(StringRecTy::get()) &&
+              !ArgType->typeIsConvertibleTo(RecordRecTy::get({}))) {
+            Error(InitLoc, Twine("expected bit, bits, int, string, or record; "
+                                 "got value of type '") + ArgType->getAsString() + 
+                                 "'");
+            return nullptr;
+          }
+          break;
+        case BinOpInit::LE:
+        case BinOpInit::LT:
+        case BinOpInit::GE:
+        case BinOpInit::GT:
+          if (!ArgType->typeIsConvertibleTo(IntRecTy::get()) &&
               !ArgType->typeIsConvertibleTo(StringRecTy::get())) {
-            Error(InitLoc, Twine("expected int, bits, or string; got value of "
-                                 "type '") + ArgType->getAsString() + "'");
+            Error(InitLoc, Twine("expected bit, bits, int, or string; "
+                                 "got value of type '") + ArgType->getAsString() + 
+                                 "'");
             return nullptr;
           }
           break;
@@ -1485,6 +1497,9 @@ Init *TGParser::ParseOperation(Record *CurRec, RecTy *ItemType) {
     return (TernOpInit::get(Code, LHS, MHS, RHS, Type))->Fold(CurRec);
   }
 
+  case tgtok::XSubstr:
+    return ParseOperationSubstr(CurRec, ItemType);
+
   case tgtok::XCond:
     return ParseOperationCond(CurRec, ItemType);
 
@@ -1626,6 +1641,9 @@ RecTy *TGParser::ParseOperatorType() {
     return nullptr;
   }
 
+  if (Lex.getCode() == tgtok::Code)
+    TokError("the 'code' type is not allowed in bang operators; use 'string'");
+
   Type = ParseType();
 
   if (!Type) {
@@ -1639,6 +1657,94 @@ RecTy *TGParser::ParseOperatorType() {
   }
 
   return Type;
+}
+
+/// Parse the !substr operation. Return null on error.
+///
+/// Substr ::= !substr(string, start-int [, length-int]) => string
+Init *TGParser::ParseOperationSubstr(Record *CurRec, RecTy *ItemType) {
+  TernOpInit::TernaryOp Code = TernOpInit::SUBSTR;
+  RecTy *Type = StringRecTy::get();
+
+  Lex.Lex(); // eat the operation
+
+  if (!consume(tgtok::l_paren)) {
+    TokError("expected '(' after !substr operator");
+    return nullptr;
+  }
+
+  Init *LHS = ParseValue(CurRec);
+  if (!LHS)
+    return nullptr;
+
+  if (!consume(tgtok::comma)) {
+    TokError("expected ',' in !substr operator");
+    return nullptr;
+  }
+
+  SMLoc MHSLoc = Lex.getLoc();
+  Init *MHS = ParseValue(CurRec);
+  if (!MHS)
+    return nullptr;
+
+  SMLoc RHSLoc = Lex.getLoc();
+  Init *RHS;
+  if (consume(tgtok::comma)) {
+    RHSLoc = Lex.getLoc();
+    RHS = ParseValue(CurRec);
+    if (!RHS)
+      return nullptr;
+  } else {
+    RHS = IntInit::get(std::numeric_limits<int64_t>::max());
+  }
+
+  if (!consume(tgtok::r_paren)) {
+    TokError("expected ')' in !substr operator");
+    return nullptr;
+  }
+
+  if (ItemType && !Type->typeIsConvertibleTo(ItemType)) {
+    Error(RHSLoc, Twine("expected value of type '") +
+                  ItemType->getAsString() + "', got '" +
+                  Type->getAsString() + "'");
+  }
+
+  TypedInit *LHSt = dyn_cast<TypedInit>(LHS);
+  if (!LHSt && !isa<UnsetInit>(LHS)) {
+    TokError("could not determine type of the string in !substr");
+    return nullptr;
+  }
+  if (LHSt && !isa<StringRecTy>(LHSt->getType())) {
+    TokError(Twine("expected string, got type '") +
+             LHSt->getType()->getAsString() + "'");
+    return nullptr;
+  }
+
+  TypedInit *MHSt = dyn_cast<TypedInit>(MHS);
+  if (!MHSt && !isa<UnsetInit>(MHS)) {
+    TokError("could not determine type of the start position in !substr");
+    return nullptr;
+  }
+  if (MHSt && !isa<IntRecTy>(MHSt->getType())) {
+    Error(MHSLoc, Twine("expected int, got type '") +
+                      MHSt->getType()->getAsString() + "'");
+    return nullptr;
+  }
+
+  if (RHS) {
+    TypedInit *RHSt = dyn_cast<TypedInit>(RHS);
+    if (!RHSt && !isa<UnsetInit>(RHS)) {
+      TokError("could not determine type of the length in !substr");
+      return nullptr;
+    }
+    if (RHSt && !isa<IntRecTy>(RHSt->getType())) {
+      TokError(Twine("expected int, got type '") +
+               RHSt->getType()->getAsString() + "'");
+      return nullptr;
+    }
+  }
+
+  return (TernOpInit::get(Code, LHS, MHS, RHS, Type))->Fold(CurRec);
 }
 
 /// Parse the !foreach and !filter operations. Return null on error.
@@ -1909,7 +2015,7 @@ Init *TGParser::ParseSimpleValue(Record *CurRec, RecTy *ItemType,
     break;
   }
   case tgtok::CodeFragment:
-    R = CodeInit::get(Lex.getCurStrVal(), Lex.getLoc());
+    R = StringInit::get(Lex.getCurStrVal(), StringInit::SF_Code);
     Lex.Lex();
     break;
   case tgtok::question:
@@ -2192,7 +2298,8 @@ Init *TGParser::ParseSimpleValue(Record *CurRec, RecTy *ItemType,
   case tgtok::XFoldl:
   case tgtok::XForEach:
   case tgtok::XFilter:
-  case tgtok::XSubst: { // Value ::= !ternop '(' Value ',' Value ',' Value ')'
+  case tgtok::XSubst:
+  case tgtok::XSubstr: { // Value ::= !ternop '(' Value ',' Value ',' Value ')'
     return ParseOperation(CurRec, ItemType);
   }
   }

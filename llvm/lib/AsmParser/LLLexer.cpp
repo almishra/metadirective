@@ -531,6 +531,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(undef);
   KEYWORD(null);
   KEYWORD(none);
+  KEYWORD(poison);
   KEYWORD(to);
   KEYWORD(caller);
   KEYWORD(within);
@@ -652,6 +653,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(nest);
   KEYWORD(noalias);
   KEYWORD(nobuiltin);
+  KEYWORD(nocallback);
   KEYWORD(nocapture);
   KEYWORD(noduplicate);
   KEYWORD(nofree);
@@ -679,7 +681,6 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(signext);
   KEYWORD(speculatable);
   KEYWORD(sret);
-  KEYWORD(nossp);
   KEYWORD(ssp);
   KEYWORD(sspreq);
   KEYWORD(sspstrong);
@@ -725,6 +726,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(vscale);
   KEYWORD(x);
   KEYWORD(blockaddress);
+  KEYWORD(dso_local_equivalent);
 
   // Metadata types.
   KEYWORD(distinct);
@@ -838,6 +840,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   TYPEKEYWORD("label",     Type::getLabelTy(Context));
   TYPEKEYWORD("metadata",  Type::getMetadataTy(Context));
   TYPEKEYWORD("x86_mmx",   Type::getX86_MMXTy(Context));
+  TYPEKEYWORD("x86_amx",   Type::getX86_AMXTy(Context));
   TYPEKEYWORD("token",     Type::getTokenTy(Context));
 
 #undef TYPEKEYWORD

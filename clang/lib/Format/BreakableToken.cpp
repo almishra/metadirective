@@ -41,8 +41,8 @@ static bool IsBlank(char C) {
 
 static StringRef getLineCommentIndentPrefix(StringRef Comment,
                                             const FormatStyle &Style) {
-  static const char *const KnownCStylePrefixes[] = {"///<", "//!<", "///", "//",
-                                                    "//!"};
+  static const char *const KnownCStylePrefixes[] = {"///<", "//!<", "///",
+                                                    "//",   "//!",  "//:"};
   static const char *const KnownTextProtoPrefixes[] = {"//", "#", "##", "###",
                                                        "####"};
   ArrayRef<const char *> KnownPrefixes(KnownCStylePrefixes);
@@ -124,9 +124,10 @@ getCommentSplit(StringRef Text, unsigned ContentStartColumn,
       continue;
     }
 
-    // Avoid ever breaking before a { in JavaScript.
+    // Avoid ever breaking before a @tag or a { in JavaScript.
     if (Style.Language == FormatStyle::LK_JavaScript &&
-        SpaceOffset + 1 < Text.size() && Text[SpaceOffset + 1] == '{') {
+        SpaceOffset + 1 < Text.size() &&
+        (Text[SpaceOffset + 1] == '{' || Text[SpaceOffset + 1] == '@')) {
       SpaceOffset = Text.find_last_of(Blanks, SpaceOffset);
       continue;
     }
@@ -772,10 +773,7 @@ BreakableLineCommentSection::BreakableLineCommentSection(
     OriginalPrefix.resize(Lines.size());
     for (size_t i = FirstLineIndex, e = Lines.size(); i < e; ++i) {
       Lines[i] = Lines[i].ltrim(Blanks);
-      // We need to trim the blanks in case this is not the first line in a
-      // multiline comment. Then the indent is included in Lines[i].
-      StringRef IndentPrefix =
-          getLineCommentIndentPrefix(Lines[i].ltrim(Blanks), Style);
+      StringRef IndentPrefix = getLineCommentIndentPrefix(Lines[i], Style);
       assert((TokenText.startswith("//") || TokenText.startswith("#")) &&
              "unsupported line comment prefix, '//' and '#' are supported");
       OriginalPrefix[i] = Prefix[i] = IndentPrefix;
@@ -791,9 +789,14 @@ BreakableLineCommentSection::BreakableLineCommentSection(
           Prefix[i] = "///< ";
         else if (Prefix[i] == "//!<")
           Prefix[i] = "//!< ";
-        else if (Prefix[i] == "#" &&
-                 Style.Language == FormatStyle::LK_TextProto)
+        else if (Prefix[i] == "#")
           Prefix[i] = "# ";
+        else if (Prefix[i] == "##")
+          Prefix[i] = "## ";
+        else if (Prefix[i] == "###")
+          Prefix[i] = "### ";
+        else if (Prefix[i] == "####")
+          Prefix[i] = "#### ";
       }
 
       Tokens[i] = LineTok;

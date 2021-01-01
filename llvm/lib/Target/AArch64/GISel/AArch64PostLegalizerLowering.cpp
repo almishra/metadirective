@@ -291,8 +291,7 @@ static bool matchDupFromInsertVectorElt(int Lane, MachineInstr &MI,
     return false;
 
   // Match the index constant 0.
-  int64_t Index = 0;
-  if (!mi_match(InsMI->getOperand(3).getReg(), MRI, m_ICst(Index)) || Index)
+  if (!mi_match(InsMI->getOperand(3).getReg(), MRI, m_ZeroInt()))
     return false;
 
   MatchInfo = ShuffleVectorPseudo(AArch64::G_DUP, MI.getOperand(0).getReg(),
@@ -439,7 +438,7 @@ tryAdjustICmpImmAndPred(Register RHS, CmpInst::Predicate P,
   auto ValAndVReg = getConstantVRegValWithLookThrough(RHS, MRI);
   if (!ValAndVReg)
     return None;
-  uint64_t C = ValAndVReg->Value;
+  uint64_t C = ValAndVReg->Value.getZExtValue();
   if (isLegalArithImmed(C))
     return None;
 

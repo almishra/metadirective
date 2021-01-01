@@ -48,7 +48,7 @@ def LO7 : SDNodeXForm<imm, [{
                                    SDLoc(N), MVT::i32);
 }]>;
 def MIMM : SDNodeXForm<imm, [{
-  return CurDAG->getTargetConstant(convMImmVal(getImmVal(N)),
+  return CurDAG->getTargetConstant(val2MImm(getImmVal(N)),
                                    SDLoc(N), MVT::i32);
 }]>;
 def LO32 : SDNodeXForm<imm, [{
@@ -66,7 +66,7 @@ def LO7FP : SDNodeXForm<fpimm, [{
   return CurDAG->getTargetConstant(SignExtend32(Val, 7), SDLoc(N), MVT::i32);
 }]>;
 def MIMMFP : SDNodeXForm<fpimm, [{
-  return CurDAG->getTargetConstant(convMImmVal(getFpImmVal(N)),
+  return CurDAG->getTargetConstant(val2MImm(getFpImmVal(N)),
                                    SDLoc(N), MVT::i32);
 }]>;
 def LOFP32 : SDNodeXForm<fpimm, [{
@@ -245,6 +245,7 @@ def fplomsbzero : PatLeaf<(fpimm), [{ return (getFpImmVal(N) & 0x80000000)
                                         == 0; }]>;
 def fplozero    : PatLeaf<(fpimm), [{ return (getFpImmVal(N) & 0xffffffff)
                                         == 0; }]>;
+def nonzero     : PatLeaf<(imm), [{ return N->getSExtValue() !=0 ; }]>;
 
 def CCSIOp : PatLeaf<(cond), [{
   switch (N->get()) {
@@ -461,6 +462,13 @@ def GetStackTop : SDNode<"VEISD::GETSTACKTOP", SDTNone,
 def MemBarrier : SDNode<"VEISD::MEMBARRIER", SDTNone,
                         [SDNPHasChain, SDNPSideEffect]>;
 
+// TS1AM
+def SDT_TS1AM : SDTypeProfile<1, 3, [SDTCisSameAs<0, 3>, SDTCisPtrTy<1>,
+                                     SDTCisVT<2, i32>, SDTCisInt<3>]>;
+def ts1am     : SDNode<"VEISD::TS1AM", SDT_TS1AM,
+                       [SDNPHasChain, SDNPMayStore, SDNPMayLoad,
+                        SDNPMemOperand]>;
+
 //===----------------------------------------------------------------------===//
 // VE Flag Conditions
 //===----------------------------------------------------------------------===//
@@ -515,7 +523,8 @@ multiclass RRbm<string opcStr, bits<8>opc,
                 RegisterClass RCo, ValueType Tyo,
                 RegisterClass RCi, ValueType Tyi,
                 SDPatternOperator OpNode = null_frag,
-                Operand immOp = simm7, Operand mOp = mimm> {
+                Operand immOp = simm7, Operand mOp = mimm,
+                bit MoveImm = 0> {
   def rr : RR<opc, (outs RCo:$sx), (ins RCi:$sy, RCi:$sz),
               !strconcat(opcStr, " $sx, $sy, $sz"),
               [(set Tyo:$sx, (OpNode Tyi:$sy, Tyi:$sz))]>;
@@ -532,7 +541,12 @@ multiclass RRbm<string opcStr, bits<8>opc,
   let cy = 0, cz = 0 in
   def im : RR<opc, (outs RCo:$sx), (ins immOp:$sy, mOp:$sz),
               !strconcat(opcStr, " $sx, $sy, $sz"),
-              [(set Tyo:$sx, (OpNode (Tyi immOp:$sy), (Tyi mOp:$sz)))]>;
+              [(set Tyo:$sx, (OpNode (Tyi immOp:$sy), (Tyi mOp:$sz)))]> {
+    // VE uses ORim as a move immediate instruction, so declare it here.
+    // An instruction declared as MoveImm will be optimized in FoldImmediate
+    // later.
+    let isMoveImm = MoveImm;
+  }
 }
 
 // Multiclass for non-commutative RR type instructions
@@ -564,8 +578,8 @@ multiclass RRNCbm<string opcStr, bits<8>opc,
 multiclass RRm<string opcStr, bits<8>opc,
                RegisterClass RC, ValueType Ty,
                SDPatternOperator OpNode = null_frag,
-               Operand immOp = simm7, Operand mOp = mimm> :
-  RRbm<opcStr, opc, RC, Ty, RC, Ty, OpNode, immOp, mOp>;
+               Operand immOp = simm7, Operand mOp = mimm, bit MoveImm = 0> :
+  RRbm<opcStr, opc, RC, Ty, RC, Ty, OpNode, immOp, mOp, MoveImm>;
 
 // Generic RR multiclass for non-commutative instructions with 2 arguments.
 //   e.g. SUBUL, SUBUW, SUBSWSX, and etc.
@@ -923,7 +937,7 @@ multiclass SHMm<string opcStr, bits<8> opc, RegisterClass RC> {
 //-----------------------------------------------------------------------------
 
 // Multiclass for generic RM instructions
-multiclass RMm<string opcStr, bits<8>opc, RegisterClass RC> {
+multiclass RMm<string opcStr, bits<8>opc, RegisterClass RC, bit MoveImm = 0> {
   def rri : RM<opc, (outs RC:$dest), (ins MEMrri:$addr),
                !strconcat(opcStr, " $dest, $addr"), []>;
   let cy = 0 in
@@ -934,14 +948,19 @@ multiclass RMm<string opcStr, bits<8>opc, RegisterClass RC> {
                !strconcat(opcStr, " $dest, $addr"), []>;
   let cy = 0, cz = 0 in
   def zii : RM<opc, (outs RC:$dest), (ins MEMzii:$addr),
-               !strconcat(opcStr, " $dest, $addr"), []>;
+               !strconcat(opcStr, " $dest, $addr"), []> {
+    // VE uses LEAzii and LEASLzii as a move immediate instruction, so declare
+    // it here.  An instruction declared as MoveImm will be optimized in
+    // FoldImmediate later.
+    let isMoveImm = MoveImm;
+  }
 }
 
 // Section 8.2.1 - LEA
 let isReMaterializable = 1, isAsCheapAsAMove = 1,
     DecoderMethod = "DecodeLoadI64" in {
-  let cx = 0 in defm LEA : RMm<"lea", 0x06, I64>;
-  let cx = 1 in defm LEASL : RMm<"lea.sl", 0x06, I64>;
+  let cx = 0 in defm LEA : RMm<"lea", 0x06, I64, /* MoveImm */ 1>;
+  let cx = 1 in defm LEASL : RMm<"lea.sl", 0x06, I64, /* MoveImm */ 1>;
 }
 
 // LEA basic patterns.
@@ -1099,9 +1118,9 @@ defm ATMAM : RRCASm<"atmam", 0x53, I64, i64, uimm0to2>;
 
 // Section 8.2.20 - CAS (Compare and Swap)
 let DecoderMethod = "DecodeCASI64" in
-defm CASL : RRCASm<"cas.l", 0x62, I64, i64, simm7>;
+defm CASL : RRCASm<"cas.l", 0x62, I64, i64, simm7, atomic_cmp_swap_64>;
 let DecoderMethod = "DecodeCASI32", cx = 1 in
-defm CASW : RRCASm<"cas.w", 0x62, I32, i32, simm7>;
+defm CASW : RRCASm<"cas.w", 0x62, I32, i32, simm7, atomic_cmp_swap_32>;
 
 //-----------------------------------------------------------------------------
 // Section 8.3 - Transfer Control Instructions
@@ -1218,7 +1237,7 @@ let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
 defm AND : RRm<"and", 0x44, I64, i64, and>;
 
 // Section 8.5.2 - OR (OR)
-defm OR : RRm<"or", 0x45, I64, i64, or>;
+defm OR : RRm<"or", 0x45, I64, i64, or, simm7, mimm, /* MoveImm */ 1>;
 
 // Section 8.5.3 - XOR (Exclusive OR)
 defm XOR : RRm<"xor", 0x46, I64, i64, xor>;
@@ -1589,13 +1608,17 @@ def vehi_only : OutPatFrag<(ops node:$hi),
                            (LEASLzii 0, 0, $hi)>;
 def vehi_lo : OutPatFrag<(ops node:$hi, node:$lo),
                          (LEASLrii $lo, 0, $hi)>;
+def vehi_lo_imm : OutPatFrag<(ops node:$hi, node:$lo, node:$idx),
+                             (LEASLrii $lo, $idx, $hi)>;
 def vehi_baselo : OutPatFrag<(ops node:$base, node:$hi, node:$lo),
                              (LEASLrri $base, $lo, $hi)>;
 foreach type = [ "tblockaddress", "tconstpool", "texternalsym", "tglobaladdr",
-                 "tglobaltlsaddr" ] in {
+                 "tglobaltlsaddr", "tjumptable" ] in {
   def : Pat<(VElo !cast<SDNode>(type):$lo), (velo_only $lo)>;
   def : Pat<(VEhi !cast<SDNode>(type):$hi), (vehi_only $hi)>;
   def : Pat<(add (VEhi !cast<SDNode>(type):$hi), I64:$lo), (vehi_lo $hi, $lo)>;
+  def : Pat<(add (add (VEhi !cast<SDNode>(type):$hi), I64:$lo), simm7:$val),
+            (vehi_lo_imm $hi, $lo, (LO7 $val))>;
   def : Pat<(add I64:$base, (add (VEhi !cast<SDNode>(type):$hi), I64:$lo)),
             (vehi_baselo $base, $hi, $lo)>;
 }
@@ -1644,7 +1667,7 @@ def : Pat<(i32 (and (trunc i64:$src), 0xffff)),
 
 // Cast to i32
 def : Pat<(i32 (trunc i64:$src)),
-          (ADDSWSXrm (EXTRACT_SUBREG $src, sub_i32), 0)>;
+          (EXTRACT_SUBREG (ANDrm $src, !add(32, 64)), sub_i32)>;
 def : Pat<(i32 (fp_to_sint f32:$src)), (CVTWSSXr RD_RZ, $src)>;
 def : Pat<(i32 (fp_to_sint f64:$src)), (CVTWDSXr RD_RZ, $src)>;
 def : Pat<(i32 (fp_to_sint f128:$src)), (CVTWDSXr RD_RZ, (CVTDQr $src))>;
@@ -1846,6 +1869,14 @@ multiclass TRATMSTm<SDPatternOperator from,
 defm : TRATMSTm<atomic_store_8, i32, ST1Brri, ST1Brii, ST1Bzri, ST1Bzii>;
 defm : TRATMSTm<atomic_store_16, i32, ST2Brri, ST2Brii, ST2Bzri, ST2Bzii>;
 defm : TRATMSTm<atomic_store_32, i32, STLrri, STLrii, STLzri, STLzii>;
+
+// Atomic swaps
+def : Pat<(i32 (ts1am i64:$src, i32:$flag, i32:$new)),
+          (TS1AMWrir $src, 0, $flag, $new)>;
+def : Pat<(i32 (atomic_swap_32 ADDRri:$src, i32:$new)),
+          (TS1AMWrii MEMriRRM:$src, 15, $new)>;
+def : Pat<(i64 (atomic_swap_64 ADDRri:$src, i64:$new)),
+          (TS1AMLrir MEMriRRM:$src, (LEAzii 0, 0, 255), i64:$new)>;
 
 // Branches
 def : Pat<(br bb:$addr), (BRCFLa bb:$addr)>;
@@ -2208,5 +2239,30 @@ def : Pat<(i32 (and i32:$val, 0xffff)),
 def : Pat<(i64 (and i64:$val, 0xffffffff)),
           (ANDrm $val, !add(32, 64))>;
 
+//===----------------------------------------------------------------------===//
+// Vector Instruction Pattern Stuff
+//===----------------------------------------------------------------------===//
+
+// Custom intermediate ISDs.
+class IsVLVT<int OpIdx> : SDTCisVT<OpIdx,i32>;
+def vec_broadcast       : SDNode<"VEISD::VEC_BROADCAST", SDTypeProfile<1, 2,
+                                 [SDTCisVec<0>, IsVLVT<2>]>>;
+
+// Whether this is an all-true mask (assuming undef-bits above VL are all-true).
+def true_mask           : PatLeaf<
+                            (vec_broadcast (i32 nonzero), (i32 srcvalue))>;
+// Match any broadcast (ignoring VL).
+def any_broadcast       : PatFrag<(ops node:$sx),
+                                  (vec_broadcast node:$sx, (i32 srcvalue))>;
+
 // Vector instructions.
 include "VEInstrVec.td"
+
+// The vevlintrin
+include "VEInstrIntrinsicVL.td"
+
+// Patterns and intermediate SD nodes (VEC_*).
+include "VEInstrPatternsVec.td"
+
+// Patterns and intermediate SD nodes (VVP_*).
+include "VVPInstrPatternsVec.td"

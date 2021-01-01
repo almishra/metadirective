@@ -104,7 +104,6 @@ private:
   ValueToValueMapTy VMap;
   IRBuilder<> Builder;
   Value *NewFramePtr = nullptr;
-  Value *SwiftErrorSlot = nullptr;
 
   /// The active suspend instruction; meaningful only for continuation and async
   /// ABIs.
@@ -152,7 +151,6 @@ private:
     llvm_unreachable("Unknown CoroCloner::Kind enum");
   }
 
-  void createDeclaration();
   void replaceEntryBlock();
   Value *deriveNewFramePointer();
   void replaceRetconOrAsyncSuspendUses();
@@ -160,7 +158,6 @@ private:
   void replaceCoroEnds();
   void replaceSwiftErrorOps();
   void handleFinalSuspend();
-  void maybeFreeContinuationStorage();
 };
 
 } // end anonymous namespace
@@ -176,8 +173,53 @@ static void maybeFreeRetconStorage(IRBuilder<> &Builder,
   Shape.emitDealloc(Builder, FramePtr, CG);
 }
 
+/// Replace an llvm.coro.end.async.
+/// Will inline the must tail call function call if there is one.
+/// \returns true if cleanup of the coro.end block is needed, false otherwise.
+static bool replaceCoroEndAsync(AnyCoroEndInst *End) {
+  IRBuilder<> Builder(End);
+
+  auto *EndAsync = dyn_cast<CoroAsyncEndInst>(End);
+  if (!EndAsync) {
+    Builder.CreateRetVoid();
+    return true /*needs cleanup of coro.end block*/;
+  }
+
+  auto *MustTailCallFunc = EndAsync->getMustTailCallFunction();
+  if (!MustTailCallFunc) {
+    Builder.CreateRetVoid();
+    return true /*needs cleanup of coro.end block*/;
+  }
+
+  // Move the must tail call from the predecessor block into the end block.
+  auto *CoroEndBlock = End->getParent();
+  auto *MustTailCallFuncBlock = CoroEndBlock->getSinglePredecessor();
+  assert(MustTailCallFuncBlock && "Must have a single predecessor block");
+  auto It = MustTailCallFuncBlock->getTerminator()->getIterator();
+  auto *MustTailCall = cast<CallInst>(&*std::prev(It));
+  CoroEndBlock->getInstList().splice(
+      End->getIterator(), MustTailCallFuncBlock->getInstList(), MustTailCall);
+
+  // Insert the return instruction.
+  Builder.SetInsertPoint(End);
+  Builder.CreateRetVoid();
+  InlineFunctionInfo FnInfo;
+
+  // Remove the rest of the block, by splitting it into an unreachable block.
+  auto *BB = End->getParent();
+  BB->splitBasicBlock(End);
+  BB->getTerminator()->eraseFromParent();
+
+  auto InlineRes = InlineFunction(*MustTailCall, FnInfo);
+  assert(InlineRes.isSuccess() && "Expected inlining to succeed");
+  (void)InlineRes;
+
+  // We have cleaned up the coro.end block above.
+  return false;
+}
+
 /// Replace a non-unwind call to llvm.coro.end.
-static void replaceFallthroughCoroEnd(CoroEndInst *End,
+static void replaceFallthroughCoroEnd(AnyCoroEndInst *End,
                                       const coro::Shape &Shape, Value *FramePtr,
                                       bool InResume, CallGraph *CG) {
   // Start inserting right before the coro.end.
@@ -195,9 +237,12 @@ static void replaceFallthroughCoroEnd(CoroEndInst *End,
     break;
 
   // In async lowering this returns.
-  case coro::ABI::Async:
-    Builder.CreateRetVoid();
+  case coro::ABI::Async: {
+    bool CoroEndBlockNeedsCleanup = replaceCoroEndAsync(End);
+    if (!CoroEndBlockNeedsCleanup)
+      return;
     break;
+  }
 
   // In unique continuation lowering, the continuations always return void.
   // But we may have implicitly allocated storage.
@@ -232,8 +277,9 @@ static void replaceFallthroughCoroEnd(CoroEndInst *End,
 }
 
 /// Replace an unwind call to llvm.coro.end.
-static void replaceUnwindCoroEnd(CoroEndInst *End, const coro::Shape &Shape,
-                                 Value *FramePtr, bool InResume, CallGraph *CG){
+static void replaceUnwindCoroEnd(AnyCoroEndInst *End, const coro::Shape &Shape,
+                                 Value *FramePtr, bool InResume,
+                                 CallGraph *CG) {
   IRBuilder<> Builder(End);
 
   switch (Shape.ABI) {
@@ -261,7 +307,7 @@ static void replaceUnwindCoroEnd(CoroEndInst *End, const coro::Shape &Shape,
   }
 }
 
-static void replaceCoroEnd(CoroEndInst *End, const coro::Shape &Shape,
+static void replaceCoroEnd(AnyCoroEndInst *End, const coro::Shape &Shape,
                            Value *FramePtr, bool InResume, CallGraph *CG) {
   if (End->isUnwind())
     replaceUnwindCoroEnd(End, Shape, FramePtr, InResume, CG);
@@ -514,10 +560,10 @@ void CoroCloner::replaceCoroSuspends() {
 }
 
 void CoroCloner::replaceCoroEnds() {
-  for (CoroEndInst *CE : Shape.CoroEnds) {
+  for (AnyCoroEndInst *CE : Shape.CoroEnds) {
     // We use a null call graph because there's no call graph node for
     // the cloned function yet.  We'll just be rebuilding that later.
-    auto NewCE = cast<CoroEndInst>(VMap[CE]);
+    auto *NewCE = cast<AnyCoroEndInst>(VMap[CE]);
     replaceCoroEnd(NewCE, Shape, NewFramePtr, /*in resume*/ true, nullptr);
   }
 }
@@ -668,16 +714,24 @@ Value *CoroCloner::deriveNewFramePointer() {
     auto *FramePtrTy = Shape.FrameTy->getPointerTo();
     auto *ProjectionFunc = cast<CoroSuspendAsyncInst>(ActiveSuspend)
                                ->getAsyncContextProjectionFunction();
+    auto DbgLoc =
+        cast<CoroSuspendAsyncInst>(VMap[ActiveSuspend])->getDebugLoc();
     // Calling i8* (i8*)
     auto *CallerContext = Builder.CreateCall(
         cast<FunctionType>(ProjectionFunc->getType()->getPointerElementType()),
         ProjectionFunc, CalleeContext);
     CallerContext->setCallingConv(ProjectionFunc->getCallingConv());
+    CallerContext->setDebugLoc(DbgLoc);
     // The frame is located after the async_context header.
     auto &Context = Builder.getContext();
     auto *FramePtrAddr = Builder.CreateConstInBoundsGEP1_32(
         Type::getInt8Ty(Context), CallerContext,
         Shape.AsyncLowering.FrameOffset, "async.ctx.frameptr");
+    // Inline the projection function.
+    InlineFunctionInfo InlineInfo;
+    auto InlineRes = InlineFunction(*CallerContext, InlineInfo);
+    assert(InlineRes.isSuccess());
+    (void)InlineRes;
     return Builder.CreateBitCast(FramePtrAddr, FramePtrTy);
   }
   // In continuation-lowering, the argument is the opaque storage.
@@ -1364,6 +1418,39 @@ static void replaceAsyncResumeFunction(CoroSuspendAsyncInst *Suspend,
   Suspend->setOperand(0, UndefValue::get(Int8PtrTy));
 }
 
+/// Coerce the arguments in \p FnArgs according to \p FnTy in \p CallArgs.
+static void coerceArguments(IRBuilder<> &Builder, FunctionType *FnTy,
+                            ArrayRef<Value *> FnArgs,
+                            SmallVectorImpl<Value *> &CallArgs) {
+  size_t ArgIdx = 0;
+  for (auto paramTy : FnTy->params()) {
+    assert(ArgIdx < FnArgs.size());
+    if (paramTy != FnArgs[ArgIdx]->getType())
+      CallArgs.push_back(
+          Builder.CreateBitOrPointerCast(FnArgs[ArgIdx], paramTy));
+    else
+      CallArgs.push_back(FnArgs[ArgIdx]);
+    ++ArgIdx;
+  }
+}
+
+CallInst *coro::createMustTailCall(DebugLoc Loc, Function *MustTailCallFn,
+                                   ArrayRef<Value *> Arguments,
+                                   IRBuilder<> &Builder) {
+  auto *FnTy =
+      cast<FunctionType>(MustTailCallFn->getType()->getPointerElementType());
+  // Coerce the arguments, llvm optimizations seem to ignore the types in
+  // vaarg functions and throws away casts in optimized mode.
+  SmallVector<Value *, 8> CallArgs;
+  coerceArguments(Builder, FnTy, Arguments, CallArgs);
+
+  auto *TailCall = Builder.CreateCall(FnTy, MustTailCallFn, CallArgs);
+  TailCall->setTailCallKind(CallInst::TCK_MustTail);
+  TailCall->setDebugLoc(Loc);
+  TailCall->setCallingConv(MustTailCallFn->getCallingConv());
+  return TailCall;
+}
+
 static void splitAsyncCoroutine(Function &F, coro::Shape &Shape,
                                 SmallVectorImpl<Function *> &Clones) {
   assert(Shape.ABI == coro::ABI::Async);
@@ -1420,15 +1507,17 @@ static void splitAsyncCoroutine(Function &F, coro::Shape &Shape,
 
     IRBuilder<> Builder(ReturnBB);
 
-    // Insert the call to the tail call function.
-    auto *Fun = Suspend->getMustTailCallFunction();
-    SmallVector<Value *, 8> Args(Suspend->operand_values());
-    auto *TailCall = Builder.CreateCall(
-        cast<FunctionType>(Fun->getType()->getPointerElementType()), Fun,
-        ArrayRef<Value *>(Args).drop_front(3).drop_back(1));
-    TailCall->setTailCallKind(CallInst::TCK_MustTail);
-    TailCall->setCallingConv(Fun->getCallingConv());
+    // Insert the call to the tail call function and inline it.
+    auto *Fn = Suspend->getMustTailCallFunction();
+    SmallVector<Value *, 8> Args(Suspend->args());
+    auto FnArgs = ArrayRef<Value *>(Args).drop_front(3);
+    auto *TailCall =
+        coro::createMustTailCall(Suspend->getDebugLoc(), Fn, FnArgs, Builder);
     Builder.CreateRetVoid();
+    InlineFunctionInfo FnInfo;
+    auto InlineRes = InlineFunction(*TailCall, FnInfo);
+    assert(InlineRes.isSuccess() && "Expected inlining to succeed");
+    (void)InlineRes;
 
     // Replace the lvm.coro.async.resume intrisic call.
     replaceAsyncResumeFunction(Suspend, Continuation);
@@ -1652,7 +1741,7 @@ static void updateCallGraphAfterCoroutineSplit(
   if (!Shape.CoroBegin)
     return;
 
-  for (llvm::CoroEndInst *End : Shape.CoroEnds) {
+  for (llvm::AnyCoroEndInst *End : Shape.CoroEnds) {
     auto &Context = End->getContext();
     End->replaceAllUsesWith(ConstantInt::getFalse(Context));
     End->eraseFromParent();

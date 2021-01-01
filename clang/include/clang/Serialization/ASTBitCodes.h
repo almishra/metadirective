@@ -1081,7 +1081,7 @@ public:
 #define SVE_TYPE(Name, Id, SingletonId) PREDEF_TYPE_##Id##_ID,
 #include "clang/Basic/AArch64SVEACLETypes.def"
       // \brief  PowerPC MMA types with auto numeration
-#define PPC_MMA_VECTOR_TYPE(Name, Id, Size) PREDEF_TYPE_##Id##_ID,
+#define PPC_VECTOR_TYPE(Name, Id, Size) PREDEF_TYPE_##Id##_ID,
 #include "clang/Basic/PPCTypes.def"
     };
 
@@ -1887,7 +1887,6 @@ public:
       STMT_SEH_TRY,               // SEHTryStmt
 
       // OpenMP directives
-      STMT_OMP_META_DIRECTIVE,
       STMT_OMP_PARALLEL_DIRECTIVE,
       STMT_OMP_SIMD_DIRECTIVE,
       STMT_OMP_FOR_DIRECTIVE,

@@ -420,6 +420,9 @@ MachineFunction::CreateMachineBasicBlock(const BasicBlock *bb) {
 void
 MachineFunction::DeleteMachineBasicBlock(MachineBasicBlock *MBB) {
   assert(MBB->getParent() == this && "MBB parent mismatch!");
+  // Clean up any references to MBB in jump tables before deleting it.
+  if (JumpTableInfo)
+    JumpTableInfo->RemoveMBBFromJumpTables(MBB);
   MBB->~MachineBasicBlock();
   BasicBlockRecycler.Deallocate(Allocator, MBB);
 }
@@ -865,7 +868,7 @@ try_next:;
   // Add the new filter.
   int FilterID = -(1 + FilterIds.size());
   FilterIds.reserve(FilterIds.size() + TyIds.size() + 1);
-  FilterIds.insert(FilterIds.end(), TyIds.begin(), TyIds.end());
+  llvm::append_range(FilterIds, TyIds);
   FilterEnds.push_back(FilterIds.size());
   FilterIds.push_back(0); // terminator
   return FilterID;
@@ -1044,6 +1047,17 @@ bool MachineJumpTableInfo::ReplaceMBBInJumpTables(MachineBasicBlock *Old,
   bool MadeChange = false;
   for (size_t i = 0, e = JumpTables.size(); i != e; ++i)
     ReplaceMBBInJumpTable(i, Old, New);
+  return MadeChange;
+}
+
+/// If MBB is present in any jump tables, remove it.
+bool MachineJumpTableInfo::RemoveMBBFromJumpTables(MachineBasicBlock *MBB) {
+  bool MadeChange = false;
+  for (MachineJumpTableEntry &JTE : JumpTables) {
+    auto removeBeginItr = std::remove(JTE.MBBs.begin(), JTE.MBBs.end(), MBB);
+    MadeChange |= (removeBeginItr != JTE.MBBs.end());
+    JTE.MBBs.erase(removeBeginItr, JTE.MBBs.end());
+  }
   return MadeChange;
 }
 

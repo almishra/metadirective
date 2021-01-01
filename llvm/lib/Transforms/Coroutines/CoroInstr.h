@@ -293,11 +293,13 @@ public:
   }
 
   /// The async context parameter.
-  Value *getStorage() const { return getArgOperand(StorageArg); }
+  Value *getStorage() const {
+    return getParent()->getParent()->getArg(getStorageArgumentIndex());
+  }
 
   unsigned getStorageArgumentIndex() const {
-    auto *Arg = cast<Argument>(getArgOperand(StorageArg)->stripPointerCasts());
-    return Arg->getArgNo();
+    auto *Arg = cast<ConstantInt>(getArgOperand(StorageArg));
+    return Arg->getZExtValue();
   }
 
   /// Return the async function pointer address. This should be the address of
@@ -575,8 +577,7 @@ public:
   }
 };
 
-/// This represents the llvm.coro.end instruction.
-class LLVM_LIBRARY_VISIBILITY CoroEndInst : public IntrinsicInst {
+class LLVM_LIBRARY_VISIBILITY AnyCoroEndInst : public IntrinsicInst {
   enum { FrameArg, UnwindArg };
 
 public:
@@ -587,7 +588,44 @@ public:
 
   // Methods to support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const IntrinsicInst *I) {
+    auto ID = I->getIntrinsicID();
+    return ID == Intrinsic::coro_end || ID == Intrinsic::coro_end_async;
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+};
+
+/// This represents the llvm.coro.end instruction.
+class LLVM_LIBRARY_VISIBILITY CoroEndInst : public AnyCoroEndInst {
+public:
+  // Methods to support type inquiry through isa, cast, and dyn_cast:
+  static bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::coro_end;
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+};
+
+/// This represents the llvm.coro.end instruction.
+class LLVM_LIBRARY_VISIBILITY CoroAsyncEndInst : public AnyCoroEndInst {
+  enum { FrameArg, UnwindArg, MustTailCallFuncArg };
+
+public:
+  void checkWellFormed() const;
+
+  Function *getMustTailCallFunction() const {
+    if (getNumArgOperands() < 3)
+      return nullptr;
+
+    return cast<Function>(
+        getArgOperand(MustTailCallFuncArg)->stripPointerCasts());
+  }
+
+  // Methods to support type inquiry through isa, cast, and dyn_cast:
+  static bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::coro_end_async;
   }
   static bool classof(const Value *V) {
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));

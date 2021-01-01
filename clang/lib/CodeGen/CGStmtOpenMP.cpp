@@ -1693,7 +1693,7 @@ void CodeGenFunction::EmitOMPParallelDirective(const OMPParallelDirective &S) {
     //
     // TODO: This defaults to shared right now.
     auto PrivCB = [](InsertPointTy AllocaIP, InsertPointTy CodeGenIP,
-                     llvm::Value &Val, llvm::Value *&ReplVal) {
+                     llvm::Value &, llvm::Value &Val, llvm::Value *&ReplVal) {
       // The next line is appropriate only for variables (Val) with the
       // data-sharing attribute "shared".
       ReplVal = &Val;
@@ -5399,7 +5399,6 @@ static void emitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_exclusive:
   case OMPC_uses_allocators:
   case OMPC_affinity:
-  case OMPC_when:
   default:
     llvm_unreachable("Clause is not allowed in 'omp atomic'.");
   }
@@ -6586,10 +6585,6 @@ void CodeGenFunction::EmitOMPMasterTaskLoopSimdDirective(
       CGOpenMPRuntime::LastprivateConditionalRAII::disable(*this, S);
   OMPLexicalScope Scope(*this, S);
   CGM.getOpenMPRuntime().emitMasterRegion(*this, CodeGen, S.getBeginLoc());
-}
-
-void CodeGenFunction::EmitOMPMetaDirective(const OMPMetaDirective &S) {
-  EmitStmt(S.getIfStmt());
 }
 
 void CodeGenFunction::EmitOMPParallelMasterTaskLoopDirective(

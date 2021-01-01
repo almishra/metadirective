@@ -943,9 +943,11 @@ Function *CodeExtractor::constructFunction(const ValueSet &inputs,
       // Those attributes should be safe to propagate to the extracted function.
       case Attribute::AlwaysInline:
       case Attribute::Cold:
+      case Attribute::Hot:
       case Attribute::NoRecurse:
       case Attribute::InlineHint:
       case Attribute::MinSize:
+      case Attribute::NoCallback:
       case Attribute::NoDuplicate:
       case Attribute::NoFree:
       case Attribute::NoImplicitFloat:
@@ -965,7 +967,6 @@ Function *CodeExtractor::constructFunction(const ValueSet &inputs,
       case Attribute::SanitizeHWAddress:
       case Attribute::SanitizeMemTag:
       case Attribute::SpeculativeLoadHardening:
-      case Attribute::NoStackProtect:
       case Attribute::StackProtect:
       case Attribute::StackProtectReq:
       case Attribute::StackProtectStrong:
@@ -1548,7 +1549,7 @@ static void fixupDebugInfoPostExtraction(Function &OldFunc, Function &NewFunc,
   // function.
   for (Instruction &I : instructions(NewFunc)) {
     if (const DebugLoc &DL = I.getDebugLoc())
-      I.setDebugLoc(DebugLoc::get(DL.getLine(), DL.getCol(), NewSP));
+      I.setDebugLoc(DILocation::get(Ctx, DL.getLine(), DL.getCol(), NewSP));
 
     // Loop info metadata may contain line locations. Fix them up.
     auto updateLoopInfoLoc = [&Ctx,
@@ -1559,7 +1560,7 @@ static void fixupDebugInfoPostExtraction(Function &OldFunc, Function &NewFunc,
     updateLoopMetadataDebugLocations(I, updateLoopInfoLoc);
   }
   if (!TheCall.getDebugLoc())
-    TheCall.setDebugLoc(DebugLoc::get(0, 0, OldSP));
+    TheCall.setDebugLoc(DILocation::get(Ctx, 0, 0, OldSP));
 
   eraseDebugIntrinsicsWithNonLocalRefs(NewFunc);
 }

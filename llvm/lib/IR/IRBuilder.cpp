@@ -80,6 +80,17 @@ static CallInst *createCallHelper(Function *Callee, ArrayRef<Value *> Ops,
   return CI;
 }
 
+Value *IRBuilderBase::CreateVScale(Constant *Scaling, const Twine &Name) {
+  Module *M = GetInsertBlock()->getParent()->getParent();
+  assert(isa<ConstantInt>(Scaling) && "Expected constant integer");
+  Function *TheFn =
+      Intrinsic::getDeclaration(M, Intrinsic::vscale, {Scaling->getType()});
+  CallInst *CI = createCallHelper(TheFn, {}, this, Name);
+  return cast<ConstantInt>(Scaling)->getSExtValue() == 1
+             ? CI
+             : CreateMul(CI, Scaling);
+}
+
 CallInst *IRBuilderBase::CreateMemSet(Value *Ptr, Value *Val, Value *Size,
                                       MaybeAlign Align, bool isVolatile,
                                       MDNode *TBAATag, MDNode *ScopeTag,
@@ -369,24 +380,12 @@ CallInst *IRBuilderBase::CreateIntMinReduce(Value *Src, bool IsSigned) {
   return getReductionIntrinsic(this, ID, Src);
 }
 
-CallInst *IRBuilderBase::CreateFPMaxReduce(Value *Src, bool NoNaN) {
-  auto Rdx = getReductionIntrinsic(this, Intrinsic::vector_reduce_fmax, Src);
-  if (NoNaN) {
-    FastMathFlags FMF;
-    FMF.setNoNaNs();
-    Rdx->setFastMathFlags(FMF);
-  }
-  return Rdx;
+CallInst *IRBuilderBase::CreateFPMaxReduce(Value *Src) {
+  return getReductionIntrinsic(this, Intrinsic::vector_reduce_fmax, Src);
 }
 
-CallInst *IRBuilderBase::CreateFPMinReduce(Value *Src, bool NoNaN) {
-  auto Rdx = getReductionIntrinsic(this, Intrinsic::vector_reduce_fmin, Src);
-  if (NoNaN) {
-    FastMathFlags FMF;
-    FMF.setNoNaNs();
-    Rdx->setFastMathFlags(FMF);
-  }
-  return Rdx;
+CallInst *IRBuilderBase::CreateFPMinReduce(Value *Src) {
+  return getReductionIntrinsic(this, Intrinsic::vector_reduce_fmin, Src);
 }
 
 CallInst *IRBuilderBase::CreateLifetimeStart(Value *Ptr, ConstantInt *Size) {
@@ -998,15 +997,16 @@ Value *IRBuilderBase::CreateVectorSplat(ElementCount EC, Value *V,
                                         const Twine &Name) {
   assert(EC.isNonZero() && "Cannot splat to an empty vector!");
 
-  // First insert it into an undef vector so we can shuffle it.
+  // First insert it into a poison vector so we can shuffle it.
   Type *I32Ty = getInt32Ty();
-  Value *Undef = UndefValue::get(VectorType::get(V->getType(), EC));
-  V = CreateInsertElement(Undef, V, ConstantInt::get(I32Ty, 0),
+  Value *Poison = PoisonValue::get(VectorType::get(V->getType(), EC));
+  V = CreateInsertElement(Poison, V, ConstantInt::get(I32Ty, 0),
                           Name + ".splatinsert");
 
   // Shuffle the value across the desired number of elements.
-  Value *Zeros = ConstantAggregateZero::get(VectorType::get(I32Ty, EC));
-  return CreateShuffleVector(V, Undef, Zeros, Name + ".splat");
+  SmallVector<int, 16> Zeros;
+  Zeros.resize(EC.getKnownMinValue());
+  return CreateShuffleVector(V, Zeros, Name + ".splat");
 }
 
 Value *IRBuilderBase::CreateExtractInteger(

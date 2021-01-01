@@ -60,6 +60,51 @@ APValue::LValueBase APValue::LValueBase::getTypeInfo(TypeInfoLValue LV,
   return Base;
 }
 
+QualType APValue::LValueBase::getType() const {
+  if (!*this) return QualType();
+  if (const ValueDecl *D = dyn_cast<const ValueDecl*>()) {
+    // FIXME: It's unclear where we're supposed to take the type from, and
+    // this actually matters for arrays of unknown bound. Eg:
+    //
+    // extern int arr[]; void f() { extern int arr[3]; };
+    // constexpr int *p = &arr[1]; // valid?
+    //
+    // For now, we take the most complete type we can find.
+    for (auto *Redecl = cast<ValueDecl>(D->getMostRecentDecl()); Redecl;
+         Redecl = cast_or_null<ValueDecl>(Redecl->getPreviousDecl())) {
+      QualType T = Redecl->getType();
+      if (!T->isIncompleteArrayType())
+        return T;
+    }
+    return D->getType();
+  }
+
+  if (is<TypeInfoLValue>())
+    return getTypeInfoType();
+
+  if (is<DynamicAllocLValue>())
+    return getDynamicAllocType();
+
+  const Expr *Base = get<const Expr*>();
+
+  // For a materialized temporary, the type of the temporary we materialized
+  // may not be the type of the expression.
+  if (const MaterializeTemporaryExpr *MTE =
+          clang::dyn_cast<MaterializeTemporaryExpr>(Base)) {
+    SmallVector<const Expr *, 2> CommaLHSs;
+    SmallVector<SubobjectAdjustment, 2> Adjustments;
+    const Expr *Temp = MTE->getSubExpr();
+    const Expr *Inner = Temp->skipRValueSubobjectAdjustments(CommaLHSs,
+                                                             Adjustments);
+    // Keep any cv-qualifiers from the reference if we generated a temporary
+    // for it directly. Otherwise use the type after adjustment.
+    if (!Adjustments.empty())
+      return Inner->getType();
+  }
+
+  return Base->getType();
+}
+
 unsigned APValue::LValueBase::getCallIndex() const {
   return (is<TypeInfoLValue>() || is<DynamicAllocLValue>()) ? 0
                                                             : Local.CallIndex;
@@ -276,7 +321,7 @@ APValue::APValue(const APValue &RHS) : Kind(None) {
   }
   case Vector:
     MakeVector();
-    setVector(((const Vec *)(const char *)RHS.Data.buffer)->Elts,
+    setVector(((const Vec *)(const char *)&RHS.Data)->Elts,
               RHS.getVectorLength());
     break;
   case ComplexInt:
@@ -347,29 +392,29 @@ APValue &APValue::operator=(APValue &&RHS) {
 
 void APValue::DestroyDataAndMakeUninit() {
   if (Kind == Int)
-    ((APSInt*)(char*)Data.buffer)->~APSInt();
+    ((APSInt *)(char *)&Data)->~APSInt();
   else if (Kind == Float)
-    ((APFloat*)(char*)Data.buffer)->~APFloat();
+    ((APFloat *)(char *)&Data)->~APFloat();
   else if (Kind == FixedPoint)
-    ((APFixedPoint *)(char *)Data.buffer)->~APFixedPoint();
+    ((APFixedPoint *)(char *)&Data)->~APFixedPoint();
   else if (Kind == Vector)
-    ((Vec*)(char*)Data.buffer)->~Vec();
+    ((Vec *)(char *)&Data)->~Vec();
   else if (Kind == ComplexInt)
-    ((ComplexAPSInt*)(char*)Data.buffer)->~ComplexAPSInt();
+    ((ComplexAPSInt *)(char *)&Data)->~ComplexAPSInt();
   else if (Kind == ComplexFloat)
-    ((ComplexAPFloat*)(char*)Data.buffer)->~ComplexAPFloat();
+    ((ComplexAPFloat *)(char *)&Data)->~ComplexAPFloat();
   else if (Kind == LValue)
-    ((LV*)(char*)Data.buffer)->~LV();
+    ((LV *)(char *)&Data)->~LV();
   else if (Kind == Array)
-    ((Arr*)(char*)Data.buffer)->~Arr();
+    ((Arr *)(char *)&Data)->~Arr();
   else if (Kind == Struct)
-    ((StructData*)(char*)Data.buffer)->~StructData();
+    ((StructData *)(char *)&Data)->~StructData();
   else if (Kind == Union)
-    ((UnionData*)(char*)Data.buffer)->~UnionData();
+    ((UnionData *)(char *)&Data)->~UnionData();
   else if (Kind == MemberPointer)
-    ((MemberPointerData*)(char*)Data.buffer)->~MemberPointerData();
+    ((MemberPointerData *)(char *)&Data)->~MemberPointerData();
   else if (Kind == AddrLabelDiff)
-    ((AddrLabelDiffData*)(char*)Data.buffer)->~AddrLabelDiffData();
+    ((AddrLabelDiffData *)(char *)&Data)->~AddrLabelDiffData();
   Kind = None;
 }
 
@@ -403,10 +448,9 @@ bool APValue::needsCleanup() const {
            "same size.");
     return getComplexIntReal().needsCleanup();
   case LValue:
-    return reinterpret_cast<const LV *>(Data.buffer)->hasPathPtr();
+    return reinterpret_cast<const LV *>(&Data)->hasPathPtr();
   case MemberPointer:
-    return reinterpret_cast<const MemberPointerData *>(Data.buffer)
-        ->hasPathPtr();
+    return reinterpret_cast<const MemberPointerData *>(&Data)->hasPathPtr();
   }
   llvm_unreachable("Unknown APValue kind!");
 }
@@ -575,6 +619,11 @@ static double GetApproxValue(const llvm::APFloat &F) {
 
 void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
                           QualType Ty) const {
+  printPretty(Out, Ctx.getPrintingPolicy(), Ty, &Ctx);
+}
+
+void APValue::printPretty(raw_ostream &Out, const PrintingPolicy &Policy,
+                          QualType Ty, const ASTContext *Ctx) const {
   // There are no objects of type 'void', but values of this type can be
   // returned from functions.
   if (Ty->isVoidType()) {
@@ -604,10 +653,10 @@ void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
   case APValue::Vector: {
     Out << '{';
     QualType ElemTy = Ty->castAs<VectorType>()->getElementType();
-    getVectorElt(0).printPretty(Out, Ctx, ElemTy);
+    getVectorElt(0).printPretty(Out, Policy, ElemTy, Ctx);
     for (unsigned i = 1; i != getVectorLength(); ++i) {
       Out << ", ";
-      getVectorElt(i).printPretty(Out, Ctx, ElemTy);
+      getVectorElt(i).printPretty(Out, Policy, ElemTy, Ctx);
     }
     Out << '}';
     return;
@@ -629,12 +678,12 @@ void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
     LValueBase Base = getLValueBase();
     if (!Base) {
       if (isNullPointer()) {
-        Out << (Ctx.getLangOpts().CPlusPlus11 ? "nullptr" : "0");
+        Out << (Policy.Nullptr ? "nullptr" : "0");
       } else if (IsReference) {
-        Out << "*(" << InnerTy.stream(Ctx.getPrintingPolicy()) << "*)"
+        Out << "*(" << InnerTy.stream(Policy) << "*)"
             << getLValueOffset().getQuantity();
       } else {
-        Out << "(" << Ty.stream(Ctx.getPrintingPolicy()) << ")"
+        Out << "(" << Ty.stream(Policy) << ")"
             << getLValueOffset().getQuantity();
       }
       return;
@@ -643,11 +692,11 @@ void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
     if (!hasLValuePath()) {
       // No lvalue path: just print the offset.
       CharUnits O = getLValueOffset();
-      CharUnits S = Ctx.getTypeSizeInChars(InnerTy);
+      CharUnits S = Ctx ? Ctx->getTypeSizeInChars(InnerTy) : CharUnits::Zero();
       if (!O.isZero()) {
         if (IsReference)
           Out << "*(";
-        if (O % S) {
+        if (S.isZero() || O % S) {
           Out << "(char*)";
           S = CharUnits::One();
         }
@@ -659,16 +708,15 @@ void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
       if (const ValueDecl *VD = Base.dyn_cast<const ValueDecl*>())
         Out << *VD;
       else if (TypeInfoLValue TI = Base.dyn_cast<TypeInfoLValue>()) {
-        TI.print(Out, Ctx.getPrintingPolicy());
+        TI.print(Out, Policy);
       } else if (DynamicAllocLValue DA = Base.dyn_cast<DynamicAllocLValue>()) {
         Out << "{*new "
-            << Base.getDynamicAllocType().stream(Ctx.getPrintingPolicy()) << "#"
+            << Base.getDynamicAllocType().stream(Policy) << "#"
             << DA.getIndex() << "}";
       } else {
         assert(Base.get<const Expr *>() != nullptr &&
                "Expecting non-null Expr");
-        Base.get<const Expr*>()->printPretty(Out, nullptr,
-                                             Ctx.getPrintingPolicy());
+        Base.get<const Expr*>()->printPretty(Out, nullptr, Policy);
       }
 
       if (!O.isZero()) {
@@ -685,37 +733,31 @@ void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
     else if (isLValueOnePastTheEnd())
       Out << "*(&";
 
-    QualType ElemTy;
+    QualType ElemTy = Base.getType();
     if (const ValueDecl *VD = Base.dyn_cast<const ValueDecl*>()) {
       Out << *VD;
-      ElemTy = VD->getType();
     } else if (TypeInfoLValue TI = Base.dyn_cast<TypeInfoLValue>()) {
-      TI.print(Out, Ctx.getPrintingPolicy());
-      ElemTy = Base.getTypeInfoType();
+      TI.print(Out, Policy);
     } else if (DynamicAllocLValue DA = Base.dyn_cast<DynamicAllocLValue>()) {
-      Out << "{*new "
-          << Base.getDynamicAllocType().stream(Ctx.getPrintingPolicy()) << "#"
+      Out << "{*new " << Base.getDynamicAllocType().stream(Policy) << "#"
           << DA.getIndex() << "}";
-      ElemTy = Base.getDynamicAllocType();
     } else {
       const Expr *E = Base.get<const Expr*>();
       assert(E != nullptr && "Expecting non-null Expr");
-      E->printPretty(Out, nullptr, Ctx.getPrintingPolicy());
-      // FIXME: This is wrong if E is a MaterializeTemporaryExpr with an lvalue
-      // adjustment.
-      ElemTy = E->getType();
+      E->printPretty(Out, nullptr, Policy);
     }
 
     ArrayRef<LValuePathEntry> Path = getLValuePath();
     const CXXRecordDecl *CastToBase = nullptr;
     for (unsigned I = 0, N = Path.size(); I != N; ++I) {
-      if (ElemTy->getAs<RecordType>()) {
+      if (ElemTy->isRecordType()) {
         // The lvalue refers to a class type, so the next path entry is a base
         // or member.
         const Decl *BaseOrMember = Path[I].getAsBaseOrMember().getPointer();
         if (const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(BaseOrMember)) {
           CastToBase = RD;
-          ElemTy = Ctx.getRecordType(RD);
+          // Leave ElemTy referring to the most-derived class. The actual type
+          // doesn't matter except for array types.
         } else {
           const ValueDecl *VD = cast<ValueDecl>(BaseOrMember);
           Out << ".";
@@ -727,7 +769,7 @@ void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
       } else {
         // The lvalue must refer to an array.
         Out << '[' << Path[I].getAsArrayIndex() << ']';
-        ElemTy = Ctx.getAsArrayType(ElemTy)->getElementType();
+        ElemTy = ElemTy->castAsArrayTypeUnsafe()->getElementType();
       }
     }
 
@@ -742,11 +784,11 @@ void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
     return;
   }
   case APValue::Array: {
-    const ArrayType *AT = Ctx.getAsArrayType(Ty);
+    const ArrayType *AT = Ty->castAsArrayTypeUnsafe();
     QualType ElemTy = AT->getElementType();
     Out << '{';
     if (unsigned N = getArrayInitializedElts()) {
-      getArrayInitializedElt(0).printPretty(Out, Ctx, ElemTy);
+      getArrayInitializedElt(0).printPretty(Out, Policy, ElemTy, Ctx);
       for (unsigned I = 1; I != N; ++I) {
         Out << ", ";
         if (I == 10) {
@@ -754,7 +796,7 @@ void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
           Out << "...";
           break;
         }
-        getArrayInitializedElt(I).printPretty(Out, Ctx, ElemTy);
+        getArrayInitializedElt(I).printPretty(Out, Policy, ElemTy, Ctx);
       }
     }
     Out << '}';
@@ -771,7 +813,7 @@ void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
         assert(BI != CD->bases_end());
         if (!First)
           Out << ", ";
-        getStructBase(I).printPretty(Out, Ctx, BI->getType());
+        getStructBase(I).printPretty(Out, Policy, BI->getType(), Ctx);
         First = false;
       }
     }
@@ -780,7 +822,7 @@ void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
         Out << ", ";
       if (FI->isUnnamedBitfield()) continue;
       getStructField(FI->getFieldIndex()).
-        printPretty(Out, Ctx, FI->getType());
+        printPretty(Out, Policy, FI->getType(), Ctx);
       First = false;
     }
     Out << '}';
@@ -790,7 +832,7 @@ void APValue::printPretty(raw_ostream &Out, const ASTContext &Ctx,
     Out << '{';
     if (const FieldDecl *FD = getUnionField()) {
       Out << "." << *FD << " = ";
-      getUnionValue().printPretty(Out, Ctx, FD->getType());
+      getUnionValue().printPretty(Out, Policy, FD->getType(), Ctx);
     }
     Out << '}';
     return;
@@ -842,49 +884,49 @@ bool APValue::toIntegralConstant(APSInt &Result, QualType SrcTy,
 
 const APValue::LValueBase APValue::getLValueBase() const {
   assert(isLValue() && "Invalid accessor");
-  return ((const LV*)(const void*)Data.buffer)->Base;
+  return ((const LV *)(const void *)&Data)->Base;
 }
 
 bool APValue::isLValueOnePastTheEnd() const {
   assert(isLValue() && "Invalid accessor");
-  return ((const LV*)(const void*)Data.buffer)->IsOnePastTheEnd;
+  return ((const LV *)(const void *)&Data)->IsOnePastTheEnd;
 }
 
 CharUnits &APValue::getLValueOffset() {
   assert(isLValue() && "Invalid accessor");
-  return ((LV*)(void*)Data.buffer)->Offset;
+  return ((LV *)(void *)&Data)->Offset;
 }
 
 bool APValue::hasLValuePath() const {
   assert(isLValue() && "Invalid accessor");
-  return ((const LV*)(const char*)Data.buffer)->hasPath();
+  return ((const LV *)(const char *)&Data)->hasPath();
 }
 
 ArrayRef<APValue::LValuePathEntry> APValue::getLValuePath() const {
   assert(isLValue() && hasLValuePath() && "Invalid accessor");
-  const LV &LVal = *((const LV*)(const char*)Data.buffer);
+  const LV &LVal = *((const LV *)(const char *)&Data);
   return llvm::makeArrayRef(LVal.getPath(), LVal.PathLength);
 }
 
 unsigned APValue::getLValueCallIndex() const {
   assert(isLValue() && "Invalid accessor");
-  return ((const LV*)(const char*)Data.buffer)->Base.getCallIndex();
+  return ((const LV *)(const char *)&Data)->Base.getCallIndex();
 }
 
 unsigned APValue::getLValueVersion() const {
   assert(isLValue() && "Invalid accessor");
-  return ((const LV*)(const char*)Data.buffer)->Base.getVersion();
+  return ((const LV *)(const char *)&Data)->Base.getVersion();
 }
 
 bool APValue::isNullPointer() const {
   assert(isLValue() && "Invalid usage");
-  return ((const LV*)(const char*)Data.buffer)->IsNullPtr;
+  return ((const LV *)(const char *)&Data)->IsNullPtr;
 }
 
 void APValue::setLValue(LValueBase B, const CharUnits &O, NoLValuePath,
                         bool IsNullPtr) {
   assert(isLValue() && "Invalid accessor");
-  LV &LVal = *((LV*)(char*)Data.buffer);
+  LV &LVal = *((LV *)(char *)&Data);
   LVal.Base = B;
   LVal.IsOnePastTheEnd = false;
   LVal.Offset = O;
@@ -896,7 +938,7 @@ MutableArrayRef<APValue::LValuePathEntry>
 APValue::setLValueUninit(LValueBase B, const CharUnits &O, unsigned Size,
                          bool IsOnePastTheEnd, bool IsNullPtr) {
   assert(isLValue() && "Invalid accessor");
-  LV &LVal = *((LV *)(char *)Data.buffer);
+  LV &LVal = *((LV *)(char *)&Data);
   LVal.Base = B;
   LVal.IsOnePastTheEnd = IsOnePastTheEnd;
   LVal.Offset = O;
@@ -910,48 +952,50 @@ void APValue::setLValue(LValueBase B, const CharUnits &O,
                         bool IsNullPtr) {
   MutableArrayRef<APValue::LValuePathEntry> InternalPath =
       setLValueUninit(B, O, Path.size(), IsOnePastTheEnd, IsNullPtr);
-  memcpy(InternalPath.data(), Path.data(),
-         Path.size() * sizeof(LValuePathEntry));
+  if (Path.size()) {
+    memcpy(InternalPath.data(), Path.data(),
+           Path.size() * sizeof(LValuePathEntry));
+  }
 }
 
 void APValue::setUnion(const FieldDecl *Field, const APValue &Value) {
   assert(isUnion() && "Invalid accessor");
-  ((UnionData *)(char *)Data.buffer)->Field =
+  ((UnionData *)(char *)&Data)->Field =
       Field ? Field->getCanonicalDecl() : nullptr;
-  *((UnionData*)(char*)Data.buffer)->Value = Value;
+  *((UnionData *)(char *)&Data)->Value = Value;
 }
 
 const ValueDecl *APValue::getMemberPointerDecl() const {
   assert(isMemberPointer() && "Invalid accessor");
   const MemberPointerData &MPD =
-      *((const MemberPointerData *)(const char *)Data.buffer);
+      *((const MemberPointerData *)(const char *)&Data);
   return MPD.MemberAndIsDerivedMember.getPointer();
 }
 
 bool APValue::isMemberPointerToDerivedMember() const {
   assert(isMemberPointer() && "Invalid accessor");
   const MemberPointerData &MPD =
-      *((const MemberPointerData *)(const char *)Data.buffer);
+      *((const MemberPointerData *)(const char *)&Data);
   return MPD.MemberAndIsDerivedMember.getInt();
 }
 
 ArrayRef<const CXXRecordDecl*> APValue::getMemberPointerPath() const {
   assert(isMemberPointer() && "Invalid accessor");
   const MemberPointerData &MPD =
-      *((const MemberPointerData *)(const char *)Data.buffer);
+      *((const MemberPointerData *)(const char *)&Data);
   return llvm::makeArrayRef(MPD.getPath(), MPD.PathLength);
 }
 
 void APValue::MakeLValue() {
   assert(isAbsent() && "Bad state change");
   static_assert(sizeof(LV) <= DataSize, "LV too big");
-  new ((void*)(char*)Data.buffer) LV();
+  new ((void *)(char *)&Data) LV();
   Kind = LValue;
 }
 
 void APValue::MakeArray(unsigned InitElts, unsigned Size) {
   assert(isAbsent() && "Bad state change");
-  new ((void*)(char*)Data.buffer) Arr(InitElts, Size);
+  new ((void *)(char *)&Data) Arr(InitElts, Size);
   Kind = Array;
 }
 
@@ -963,7 +1007,7 @@ MutableArrayRef<const CXXRecordDecl *>
 APValue::setMemberPointerUninit(const ValueDecl *Member, bool IsDerivedMember,
                                 unsigned Size) {
   assert(isAbsent() && "Bad state change");
-  MemberPointerData *MPD = new ((void *)(char *)Data.buffer) MemberPointerData;
+  MemberPointerData *MPD = new ((void *)(char *)&Data) MemberPointerData;
   Kind = MemberPointer;
   MPD->MemberAndIsDerivedMember.setPointer(
       Member ? cast<ValueDecl>(Member->getCanonicalDecl()) : nullptr);
@@ -1019,7 +1063,7 @@ LinkageInfo LinkageComputer::getLVForValue(const APValue &V,
   }
 
   case APValue::Union:
-    if (const auto *FD = V.getUnionField())
+    if (V.getUnionField())
       Merge(V.getUnionValue());
     break;
 

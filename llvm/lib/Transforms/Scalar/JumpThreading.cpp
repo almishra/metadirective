@@ -32,6 +32,7 @@
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
@@ -153,6 +154,7 @@ namespace {
       AU.addPreserved<LazyValueInfoWrapperPass>();
       AU.addPreserved<GlobalsAAWrapperPass>();
       AU.addRequired<TargetLibraryInfoWrapperPass>();
+      AU.addRequired<TargetTransformInfoWrapperPass>();
     }
 
     void releaseMemory() override { Impl.releaseMemory(); }
@@ -311,6 +313,10 @@ static void updatePredecessorProfileMetadata(PHINode *PN, BasicBlock *BB) {
 bool JumpThreading::runOnFunction(Function &F) {
   if (skipFunction(F))
     return false;
+  auto TTI = &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
+  // Jump Threading has no sense for the targets with divergent CF
+  if (TTI->hasBranchDivergence())
+    return false;
   auto TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
   auto DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   auto LVI = &getAnalysis<LazyValueInfoWrapperPass>().getLVI();
@@ -351,6 +357,11 @@ PreservedAnalyses JumpThreadingPass::run(Function &F,
 
   bool Changed = runImpl(F, &TLI, &LVI, &AA, &DTU, F.hasProfileData(),
                          std::move(BFI), std::move(BPI));
+
+  if (PrintLVIAfterJumpThreading) {
+    dbgs() << "LVI for function '" << F.getName() << "':\n";
+    LVI.printLVI(F, DTU.getDomTree(), dbgs());
+  }
 
   if (!Changed)
     return PreservedAnalyses::all();
@@ -537,6 +548,10 @@ static unsigned getJumpThreadDuplicationCost(BasicBlock *BB,
 
     // Debugger intrinsics don't incur code size.
     if (isa<DbgInfoIntrinsic>(I)) continue;
+
+    // Pseudo-probes don't incur code size.
+    if (isa<PseudoProbeInst>(I))
+      continue;
 
     // If this is a pointer->pointer bitcast, it is free.
     if (isa<BitCastInst>(I) && I->getType()->isPointerTy())
@@ -1102,6 +1117,8 @@ bool JumpThreadingPass::processBlock(BasicBlock *BB) {
                       << '\n');
     ++NumFolds;
     ConstantFoldTerminator(BB, true, nullptr, DTU);
+    if (HasProfileData)
+      BPI->eraseBlock(BB);
     return true;
   }
 
@@ -1157,6 +1174,8 @@ bool JumpThreadingPass::processBlock(BasicBlock *BB) {
         }
         DTU->applyUpdatesPermissive(
             {{DominatorTree::Delete, BB, ToRemoveSucc}});
+        if (HasProfileData)
+          BPI->eraseBlock(BB);
         return true;
       }
 
@@ -1254,6 +1273,8 @@ bool JumpThreadingPass::processImpliedCondition(BasicBlock *BB) {
       UncondBI->setDebugLoc(BI->getDebugLoc());
       BI->eraseFromParent();
       DTU->applyUpdatesPermissive({{DominatorTree::Delete, BB, RemoveSucc}});
+      if (HasProfileData)
+        BPI->eraseBlock(BB);
       return true;
     }
     CurrentBB = CurrentPred;
@@ -1697,6 +1718,8 @@ bool JumpThreadingPass::processThreadableEdges(Value *Cond, BasicBlock *BB,
       BranchInst::Create(OnlyDest, Term);
       Term->eraseFromParent();
       DTU->applyUpdatesPermissive(Updates);
+      if (HasProfileData)
+        BPI->eraseBlock(BB);
 
       // If the condition is now dead due to the removal of the old terminator,
       // erase it.
@@ -2237,12 +2260,8 @@ void JumpThreadingPass::threadThroughTwoBasicBlocks(BasicBlock *PredPredBB,
       cloneInstructions(PredBB->begin(), PredBB->end(), NewBB, PredPredBB);
 
   // Copy the edge probabilities from PredBB to NewBB.
-  if (HasProfileData) {
-    SmallVector<BranchProbability, 4> Probs;
-    for (BasicBlock *Succ : successors(PredBB))
-      Probs.push_back(BPI->getEdgeProbability(PredBB, Succ));
-    BPI->setEdgeProbability(NewBB, Probs);
-  }
+  if (HasProfileData)
+    BPI->copyEdgeProbabilities(PredBB, NewBB);
 
   // Update the terminator of PredPredBB to jump to NewBB instead of PredBB.
   // This eliminates predecessors from PredPredBB, which requires us to simplify
@@ -2672,6 +2691,8 @@ bool JumpThreadingPass::duplicateCondBranchOnPHIIntoPred(
 
   // Remove the unconditional branch at the end of the PredBB block.
   OldPredBranch->eraseFromParent();
+  if (HasProfileData)
+    BPI->copyEdgeProbabilities(BB, PredBB);
   DTU->applyUpdatesPermissive(Updates);
 
   ++NumDupes;
