@@ -123,6 +123,8 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
     C.toCharUnitsFromBits(C.getTargetInfo().getMaxPointerWidth()).getQuantity();
   IntAlignInBytes =
     C.toCharUnitsFromBits(C.getTargetInfo().getIntAlign()).getQuantity();
+  CharTy =
+    llvm::IntegerType::get(LLVMContext, C.getTargetInfo().getCharWidth());
   IntTy = llvm::IntegerType::get(LLVMContext, C.getTargetInfo().getIntWidth());
   IntPtrTy = llvm::IntegerType::get(LLVMContext,
     C.getTargetInfo().getMaxPointerWidth());
@@ -983,17 +985,27 @@ static bool shouldAssumeDSOLocal(const CodeGenModule &CGM,
   if (TT.isPPC64())
     return false;
 
-  // If we can use copy relocations we can assume it is local.
-  if (auto *Var = dyn_cast<llvm::GlobalVariable>(GV))
-    if (!Var->isThreadLocal() &&
-        (RM == llvm::Reloc::Static || CGOpts.PIECopyRelocations))
-      return true;
+  if (CGOpts.DirectAccessExternalData) {
+    // If -fdirect-access-external-data (default for -fno-pic), set dso_local
+    // for non-thread-local variables. If the symbol is not defined in the
+    // executable, a copy relocation will be needed at link time. dso_local is
+    // excluded for thread-local variables because they generally don't support
+    // copy relocations.
+    if (auto *Var = dyn_cast<llvm::GlobalVariable>(GV))
+      if (!Var->isThreadLocal())
+        return true;
 
-  // If we can use a plt entry as the symbol address we can assume it
-  // is local.
-  // FIXME: This should work for PIE, but the gold linker doesn't support it.
-  if (isa<llvm::Function>(GV) && !CGOpts.NoPLT && RM == llvm::Reloc::Static)
-    return true;
+    // -fno-pic sets dso_local on a function declaration to allow direct
+    // accesses when taking its address (similar to a data symbol). If the
+    // function is not defined in the executable, a canonical PLT entry will be
+    // needed at link time. -fno-direct-access-external-data can avoid the
+    // canonical PLT entry. We don't generalize this condition to -fpie/-fpic as
+    // it could just cause trouble without providing perceptible benefits.
+    if (isa<llvm::Function>(GV) && !CGOpts.NoPLT && RM == llvm::Reloc::Static)
+      return true;
+  }
+
+  // If we can use copy relocations we can assume it is local.
 
   // Otherwise don't assume it is local.
   return false;
@@ -1761,9 +1773,6 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
     if (D->hasAttr<MinSizeAttr>())
       B.addAttribute(llvm::Attribute::MinSize);
   }
-
-  if (D->hasAttr<NoMergeAttr>())
-    B.addAttribute(llvm::Attribute::NoMerge);
 
   F->addAttributes(llvm::AttributeList::FunctionIndex, B);
 
@@ -2554,6 +2563,34 @@ bool CodeGenModule::imbueXRayAttrs(llvm::Function *Fn, SourceLocation Loc,
   return true;
 }
 
+bool CodeGenModule::isProfileInstrExcluded(llvm::Function *Fn,
+                                           SourceLocation Loc) const {
+  const auto &ProfileList = getContext().getProfileList();
+  // If the profile list is empty, then instrument everything.
+  if (ProfileList.isEmpty())
+    return false;
+  CodeGenOptions::ProfileInstrKind Kind = getCodeGenOpts().getProfileInstr();
+  // First, check the function name.
+  Optional<bool> V = ProfileList.isFunctionExcluded(Fn->getName(), Kind);
+  if (V.hasValue())
+    return *V;
+  // Next, check the source location.
+  if (Loc.isValid()) {
+    Optional<bool> V = ProfileList.isLocationExcluded(Loc, Kind);
+    if (V.hasValue())
+      return *V;
+  }
+  // If location is unknown, this may be a compiler-generated function. Assume
+  // it's located in the main file.
+  auto &SM = Context.getSourceManager();
+  if (const auto *MainFile = SM.getFileEntryForID(SM.getMainFileID())) {
+    Optional<bool> V = ProfileList.isFileExcluded(MainFile->getName(), Kind);
+    if (V.hasValue())
+      return *V;
+  }
+  return ProfileList.getDefault();
+}
+
 bool CodeGenModule::MustBeEmitted(const ValueDecl *Global) {
   // Never defer when EmitAllDecls is specified.
   if (LangOpts.EmitAllDecls)
@@ -2994,7 +3031,7 @@ bool CodeGenModule::shouldEmitFunction(GlobalDecl GD) {
   if (CodeGenOpts.OptimizationLevel == 0 && !F->hasAttr<AlwaysInlineAttr>())
     return false;
 
-  if (F->hasAttr<DLLImportAttr>()) {
+  if (F->hasAttr<DLLImportAttr>() && !F->hasAttr<AlwaysInlineAttr>()) {
     // Check whether it would be safe to inline this dllimport function.
     DLLImportFunctionVisitor Visitor;
     Visitor.TraverseFunctionDecl(const_cast<FunctionDecl*>(F));
@@ -4145,13 +4182,14 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   // Shadows of initialized device-side global variables are also left
   // undefined.
   bool IsCUDAShadowVar =
-      !getLangOpts().CUDAIsDevice &&
+      !getLangOpts().CUDAIsDevice && !D->hasAttr<HIPManagedAttr>() &&
       (D->hasAttr<CUDAConstantAttr>() || D->hasAttr<CUDADeviceAttr>() ||
        D->hasAttr<CUDASharedAttr>());
   bool IsCUDADeviceShadowVar =
       getLangOpts().CUDAIsDevice &&
       (D->getType()->isCUDADeviceBuiltinSurfaceType() ||
-       D->getType()->isCUDADeviceBuiltinTextureType());
+       D->getType()->isCUDADeviceBuiltinTextureType() ||
+       D->hasAttr<HIPManagedAttr>());
   // HIP pinned shadow of initialized host-side global variables are also
   // left undefined.
   if (getLangOpts().CUDA &&

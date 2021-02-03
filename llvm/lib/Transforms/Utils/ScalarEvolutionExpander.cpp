@@ -1440,6 +1440,17 @@ Value *SCEVExpander::expandAddRecExprLiterally(const SCEVAddRecExpr *S) {
     assert(LatchBlock && "PostInc mode requires a unique loop latch!");
     Result = PN->getIncomingValueForBlock(LatchBlock);
 
+    // We might be introducing a new use of the post-inc IV that is not poison
+    // safe, in which case we should drop poison generating flags. Only keep
+    // those flags for which SCEV has proven that they always hold.
+    if (isa<OverflowingBinaryOperator>(Result)) {
+      auto *I = cast<Instruction>(Result);
+      if (!S->hasNoUnsignedWrap())
+        I->setHasNoUnsignedWrap(false);
+      if (!S->hasNoSignedWrap())
+        I->setHasNoSignedWrap(false);
+    }
+
     // For an expansion to use the postinc form, the client must call
     // expandCodeFor with an InsertPoint that is either outside the PostIncLoop
     // or dominated by IVIncInsertPos.
@@ -1986,28 +1997,6 @@ void SCEVExpander::rememberInstruction(Value *I) {
   }
 }
 
-/// getOrInsertCanonicalInductionVariable - This method returns the
-/// canonical induction variable of the specified type for the specified
-/// loop (inserting one if there is none).  A canonical induction variable
-/// starts at zero and steps by one on each iteration.
-PHINode *
-SCEVExpander::getOrInsertCanonicalInductionVariable(const Loop *L,
-                                                    Type *Ty) {
-  assert(Ty->isIntegerTy() && "Can only insert integer induction variables!");
-
-  // Build a SCEV for {0,+,1}<L>.
-  // Conservatively use FlagAnyWrap for now.
-  const SCEV *H = SE.getAddRecExpr(SE.getConstant(Ty, 0),
-                                   SE.getConstant(Ty, 1), L, SCEV::FlagAnyWrap);
-
-  // Emit code for it.
-  SCEVInsertPointGuard Guard(Builder, this);
-  PHINode *V = cast<PHINode>(expandCodeForImpl(
-      H, nullptr, &*L->getHeader()->getFirstInsertionPt(), false));
-
-  return V;
-}
-
 /// replaceCongruentIVs - Check for congruent phis in this loop header and
 /// replace them with their most canonical representative. Return the number of
 /// phis eliminated.
@@ -2150,15 +2139,6 @@ SCEVExpander::replaceCongruentIVs(Loop *L, const DominatorTree *DT,
     DeadInsts.emplace_back(Phi);
   }
   return NumElim;
-}
-
-Value *SCEVExpander::getExactExistingExpansion(const SCEV *S,
-                                               const Instruction *At, Loop *L) {
-  Optional<ScalarEvolution::ValueOffsetPair> VO =
-      getRelatedExistingExpansion(S, At, L);
-  if (VO && VO.getValue().second == nullptr)
-    return VO.getValue().first;
-  return nullptr;
 }
 
 Optional<ScalarEvolution::ValueOffsetPair>

@@ -633,8 +633,8 @@ void CodeGenPrepare::removeAllAssertingVHReferences(Value *V) {
     return;
 
   auto &GEPVector = VecI->second;
-  const auto &I = std::find_if(GEPVector.begin(), GEPVector.end(),
-                               [=](auto &Elt) { return Elt.first == GEP; });
+  const auto &I =
+      llvm::find_if(GEPVector, [=](auto &Elt) { return Elt.first == GEP; });
   if (I == GEPVector.end())
     return;
 
@@ -661,7 +661,7 @@ bool CodeGenPrepare::eliminateFallThrough(Function &F) {
   // Use a temporary array to avoid iterator being invalidated when
   // deleting blocks.
   SmallVector<WeakTrackingVH, 16> Blocks;
-  for (auto &Block : llvm::make_range(std::next(F.begin()), F.end()))
+  for (auto &Block : llvm::drop_begin(F))
     Blocks.push_back(&Block);
 
   SmallSet<WeakTrackingVH, 16> Preds;
@@ -747,7 +747,7 @@ bool CodeGenPrepare::eliminateMostlyEmptyBlocks(Function &F) {
   // as we remove them.
   // Note that this intentionally skips the entry block.
   SmallVector<WeakTrackingVH, 16> Blocks;
-  for (auto &Block : llvm::make_range(std::next(F.begin()), F.end()))
+  for (auto &Block : llvm::drop_begin(F))
     Blocks.push_back(&Block);
 
   for (auto &Block : Blocks) {
@@ -2230,8 +2230,7 @@ bool CodeGenPrepare::dupRetToEnableTailCallOpts(BasicBlock *BB, bool &ModifiedDT
     EVI = dyn_cast<ExtractValueInst>(V);
     if (EVI) {
       V = EVI->getOperand(0);
-      if (!std::all_of(EVI->idx_begin(), EVI->idx_end(),
-                       [](unsigned idx) { return idx == 0; }))
+      if (!llvm::all_of(EVI->indices(), [](unsigned idx) { return idx == 0; }))
         return false;
     }
 
@@ -2243,21 +2242,25 @@ bool CodeGenPrepare::dupRetToEnableTailCallOpts(BasicBlock *BB, bool &ModifiedDT
   if (PN && PN->getParent() != BB)
     return false;
 
-  // Make sure there are no instructions between the PHI and return, or that the
-  // return is the first instruction in the block.
-  if (PN) {
-    BasicBlock::iterator BI = BB->begin();
-    // Skip over debug and the bitcast.
-    do {
-      ++BI;
-    } while (isa<DbgInfoIntrinsic>(BI) || &*BI == BCI || &*BI == EVI ||
-             isa<PseudoProbeInst>(BI));
-    if (&*BI != RetI)
-      return false;
-  } else {
-    if (BB->getFirstNonPHIOrDbg(true) != RetI)
-      return false;
-  }
+  auto isLifetimeEndOrBitCastFor = [](const Instruction *Inst) {
+    const BitCastInst *BC = dyn_cast<BitCastInst>(Inst);
+    if (BC && BC->hasOneUse())
+      Inst = BC->user_back();
+
+    if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(Inst))
+      return II->getIntrinsicID() == Intrinsic::lifetime_end;
+    return false;
+  };
+
+  // Make sure there are no instructions between the first instruction
+  // and return.
+  const Instruction *BI = BB->getFirstNonPHI();
+  // Skip over debug and the bitcast.
+  while (isa<DbgInfoIntrinsic>(BI) || BI == BCI || BI == EVI ||
+         isa<PseudoProbeInst>(BI) || isLifetimeEndOrBitCastFor(BI))
+    BI = BI->getNextNode();
+  if (BI != RetI)
+    return false;
 
   /// Only dup the ReturnInst if the CallInst is likely to be emitted as a tail
   /// call.
@@ -3160,9 +3163,7 @@ public:
   /// \returns whether the element is actually removed, i.e. was in the
   /// collection before the operation.
   bool erase(PHINode *Ptr) {
-    auto it = NodeMap.find(Ptr);
-    if (it != NodeMap.end()) {
-      NodeMap.erase(Ptr);
+    if (NodeMap.erase(Ptr)) {
       SkipRemovedElements(FirstValidElement);
       return true;
     }
@@ -3717,8 +3718,7 @@ private:
             PHINode::Create(CommonType, PredCount, "sunk_phi", CurrentPhi);
         Map[Current] = PHI;
         ST.insertNewPhi(PHI);
-        for (Value *P : CurrentPhi->incoming_values())
-          Worklist.push_back(P);
+        append_range(Worklist, CurrentPhi->incoming_values());
       }
     }
   }
@@ -4972,8 +4972,7 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
 
     // For a PHI node, push all of its incoming values.
     if (PHINode *P = dyn_cast<PHINode>(V)) {
-      for (Value *IncValue : P->incoming_values())
-        worklist.push_back(IncValue);
+      append_range(worklist, P->incoming_values());
       PhiOrSelectSeen = true;
       continue;
     }
@@ -6702,6 +6701,7 @@ bool CodeGenPrepare::optimizeSelectInst(SelectInst *SI) {
 /// in MVE takes a GPR (integer) register, and the instruction that incorporate
 /// a VDUP (such as a VADD qd, qm, rm) also require a gpr register.
 bool CodeGenPrepare::optimizeShuffleVectorInst(ShuffleVectorInst *SVI) {
+  // Accept shuf(insertelem(undef/poison, val, 0), undef/poison, <0,0,..>) only
   if (!match(SVI, m_Shuffle(m_InsertElt(m_Undef(), m_Value(), m_ZeroInt()),
                             m_Undef(), m_ZeroMask())))
     return false;
@@ -6721,9 +6721,7 @@ bool CodeGenPrepare::optimizeShuffleVectorInst(ShuffleVectorInst *SVI) {
   Builder.SetInsertPoint(SVI);
   Value *BC1 = Builder.CreateBitCast(
       cast<Instruction>(SVI->getOperand(0))->getOperand(1), NewType);
-  Value *Insert = Builder.CreateInsertElement(UndefValue::get(NewVecType), BC1,
-                                              (uint64_t)0);
-  Value *Shuffle = Builder.CreateShuffleVector(Insert, SVI->getShuffleMask());
+  Value *Shuffle = Builder.CreateVectorSplat(NewVecType->getNumElements(), BC1);
   Value *BC2 = Builder.CreateBitCast(Shuffle, SVIVecType);
 
   SVI->replaceAllUsesWith(BC2);

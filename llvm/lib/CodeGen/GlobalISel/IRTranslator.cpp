@@ -368,7 +368,7 @@ bool IRTranslator::translateRet(const User &U, MachineIRBuilder &MIRBuilder) {
   // The target may mess up with the insertion point, but
   // this is not important as a return is the last instruction
   // of the block anyway.
-  return CLI->lowerReturn(MIRBuilder, Ret, VRegs, SwiftErrorVReg);
+  return CLI->lowerReturn(MIRBuilder, Ret, VRegs, FuncInfo, SwiftErrorVReg);
 }
 
 void IRTranslator::emitBranchForMergedCondition(
@@ -840,9 +840,8 @@ void IRTranslator::emitSwitchCase(SwitchCG::CaseBlock &CB,
     // For conditional branch lowering, we might try to do something silly like
     // emit an G_ICMP to compare an existing G_ICMP i1 result with true. If so,
     // just re-use the existing condition vreg.
-    if (CI && CI->getZExtValue() == 1 &&
-        MRI->getType(CondLHS).getSizeInBits() == 1 &&
-        CB.PredInfo.Pred == CmpInst::ICMP_EQ) {
+    if (MRI->getType(CondLHS).getSizeInBits() == 1 && CI &&
+        CI->getZExtValue() == 1 && CB.PredInfo.Pred == CmpInst::ICMP_EQ) {
       Cond = CondLHS;
     } else {
       Register CondRHS = getOrCreateVReg(*CB.CmpRHS);
@@ -2126,6 +2125,7 @@ bool IRTranslator::translateKnownIntrinsic(const CallInst &CI, Intrinsic::ID ID,
     return true;
   }
   case Intrinsic::assume:
+  case Intrinsic::experimental_noalias_scope_decl:
   case Intrinsic::var_annotation:
   case Intrinsic::sideeffect:
     // Discard annotate attributes, assumptions, and artificial side-effects.
@@ -3067,6 +3067,8 @@ bool IRTranslator::runOnMachineFunction(MachineFunction &CurMF) {
   else
     FuncInfo.BPI = nullptr;
 
+  FuncInfo.CanLowerReturn = CLI->checkReturnTypeForCallConv(*MF);
+
   const auto &TLI = *MF->getSubtarget().getTargetLowering();
 
   SL = std::make_unique<GISelSwitchLowering>(this, FuncInfo);
@@ -3140,7 +3142,7 @@ bool IRTranslator::runOnMachineFunction(MachineFunction &CurMF) {
     }
   }
 
-  if (!CLI->lowerFormalArguments(*EntryBuilder.get(), F, VRegArgs)) {
+  if (!CLI->lowerFormalArguments(*EntryBuilder.get(), F, VRegArgs, FuncInfo)) {
     OptimizationRemarkMissed R("gisel-irtranslator", "GISelFailure",
                                F.getSubprogram(), &F.getEntryBlock());
     R << "unable to lower arguments: " << ore::NV("Prototype", F.getType());

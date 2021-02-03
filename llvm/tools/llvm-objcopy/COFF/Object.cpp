@@ -31,10 +31,7 @@ void Object::updateSymbols() {
 }
 
 const Symbol *Object::findSymbol(size_t UniqueId) const {
-  auto It = SymbolMap.find(UniqueId);
-  if (It == SymbolMap.end())
-    return nullptr;
-  return It->second;
+  return SymbolMap.lookup(UniqueId);
 }
 
 Error Object::removeSymbols(
@@ -86,16 +83,13 @@ void Object::updateSections() {
 }
 
 const Section *Object::findSection(ssize_t UniqueId) const {
-  auto It = SectionMap.find(UniqueId);
-  if (It == SectionMap.end())
-    return nullptr;
-  return It->second;
+  return SectionMap.lookup(UniqueId);
 }
 
 void Object::removeSections(function_ref<bool(const Section &)> ToRemove) {
   DenseSet<ssize_t> AssociatedSections;
   auto RemoveAssociated = [&AssociatedSections](const Section &Sec) {
-    return AssociatedSections.count(Sec.UniqueId) == 1;
+    return AssociatedSections.contains(Sec.UniqueId);
   };
   do {
     DenseSet<ssize_t> RemovedSections;
@@ -115,7 +109,7 @@ void Object::removeSections(function_ref<bool(const Section &)> ToRemove) {
           // leave them dangling).
           if (RemovedSections.count(Sym.AssociativeComdatTargetSectionId) == 1)
             AssociatedSections.insert(Sym.TargetSectionId);
-          return RemovedSections.count(Sym.TargetSectionId) == 1;
+          return RemovedSections.contains(Sym.TargetSectionId);
         });
     ToRemove = RemoveAssociated;
   } while (!AssociatedSections.empty());

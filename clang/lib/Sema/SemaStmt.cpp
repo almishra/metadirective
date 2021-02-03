@@ -672,8 +672,7 @@ static bool CmpCaseVals(const std::pair<llvm::APSInt, CaseStmt*>& lhs,
     return true;
 
   if (lhs.first == rhs.first &&
-      lhs.second->getCaseLoc().getRawEncoding()
-       < rhs.second->getCaseLoc().getRawEncoding())
+      lhs.second->getCaseLoc() < rhs.second->getCaseLoc())
     return true;
   return false;
 }
@@ -3127,7 +3126,7 @@ static bool TryMoveInitialization(Sema &S, const InitializedEntity &Entity,
                                   const VarDecl *NRVOCandidate,
                                   QualType ResultType, Expr *&Value,
                                   bool ConvertingConstructorsOnly,
-                                  ExprResult &Res) {
+                                  bool IsDiagnosticsCheck, ExprResult &Res) {
   ImplicitCastExpr AsRvalue(ImplicitCastExpr::OnStack, Value->getType(),
                             CK_NoOp, Value, VK_XValue, FPOptionsOverride());
 
@@ -3139,7 +3138,8 @@ static bool TryMoveInitialization(Sema &S, const InitializedEntity &Entity,
   InitializationSequence Seq(S, Entity, Kind, InitExpr);
 
   bool NeedSecondOverloadResolution = true;
-  if (!Seq && Seq.getFailedOverloadResult() != OR_Deleted) {
+  if (!Seq &&
+      (IsDiagnosticsCheck || Seq.getFailedOverloadResult() != OR_Deleted)) {
     return NeedSecondOverloadResolution;
   }
 
@@ -3239,14 +3239,13 @@ Sema::PerformMoveOrCopyInitialization(const InitializedEntity &Entity,
 
     if (NRVOCandidate) {
       NeedSecondOverloadResolution = TryMoveInitialization(
-          *this, Entity, NRVOCandidate, ResultType, Value, true, Res);
+          *this, Entity, NRVOCandidate, ResultType, Value, true, false, Res);
     }
 
     if (!NeedSecondOverloadResolution && AffectedByCWG1579) {
       QualType QT = NRVOCandidate->getType();
-      if (QT.getNonReferenceType()
-                     .getUnqualifiedType()
-                     .isTriviallyCopyableType(Context)) {
+      if (QT.getNonReferenceType().getUnqualifiedType().isTriviallyCopyableType(
+              Context)) {
         // Adding 'std::move' around a trivially copyable variable is probably
         // pointless. Don't suggest it.
       } else {
@@ -3260,8 +3259,8 @@ Sema::PerformMoveOrCopyInitialization(const InitializedEntity &Entity,
         Str += NRVOCandidate->getDeclName().getAsString();
         Str += ")";
         Diag(Value->getExprLoc(), diag::warn_return_std_move_in_cxx11)
-            << Value->getSourceRange()
-            << NRVOCandidate->getDeclName() << ResultType << QT;
+            << Value->getSourceRange() << NRVOCandidate->getDeclName()
+            << ResultType << QT;
         Diag(Value->getExprLoc(), diag::note_add_std_move_in_cxx11)
             << FixItHint::CreateReplacement(Value->getSourceRange(), Str);
       }
@@ -3284,7 +3283,7 @@ Sema::PerformMoveOrCopyInitialization(const InitializedEntity &Entity,
           ExprResult FakeRes = ExprError();
           Expr *FakeValue = Value;
           TryMoveInitialization(*this, Entity, FakeNRVOCandidate, ResultType,
-                                FakeValue, false, FakeRes);
+                                FakeValue, false, true, FakeRes);
           if (!FakeRes.isInvalid()) {
             bool IsThrow =
                 (Entity.getKind() == InitializedEntity::EK_Exception);

@@ -11,6 +11,9 @@
 // at the end of the legalization.
 //===----------------------------------------------------------------------===//
 
+#ifndef LLVM_CODEGEN_GLOBALISEL_LEGALIZATIONARTIFACTCOMBINER_H
+#define LLVM_CODEGEN_GLOBALISEL_LEGALIZATIONARTIFACTCOMBINER_H
+
 #include "llvm/CodeGen/GlobalISel/Legalizer.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
@@ -486,7 +489,7 @@ public:
                                     MachineRegisterInfo &MRI,
                                     MachineIRBuilder &Builder,
                                     SmallVectorImpl<Register> &UpdatedDefs,
-                                    GISelObserverWrapper &Observer) {
+                                    GISelChangeObserver &Observer) {
     if (!llvm::canReplaceReg(DstReg, SrcReg, MRI)) {
       Builder.buildCopy(DstReg, SrcReg);
       UpdatedDefs.push_back(DstReg);
@@ -521,7 +524,7 @@ public:
   bool tryCombineUnmergeValues(MachineInstr &MI,
                                SmallVectorImpl<MachineInstr *> &DeadInsts,
                                SmallVectorImpl<Register> &UpdatedDefs,
-                               GISelObserverWrapper &Observer) {
+                               GISelChangeObserver &Observer) {
     assert(MI.getOpcode() == TargetOpcode::G_UNMERGE_VALUES);
 
     unsigned NumDefs = MI.getNumOperands() - 1;
@@ -1009,3 +1012,5 @@ private:
 };
 
 } // namespace llvm
+
+#endif // LLVM_CODEGEN_GLOBALISEL_LEGALIZATIONARTIFACTCOMBINER_H

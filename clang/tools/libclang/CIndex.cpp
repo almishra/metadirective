@@ -3351,10 +3351,8 @@ RefNamePieces buildPieces(unsigned NameFlags, bool IsMemberRefExpr,
     Pieces.push_back(*TemplateArgsLoc);
 
   if (Kind == DeclarationName::CXXOperatorName) {
-    Pieces.push_back(SourceLocation::getFromRawEncoding(
-        NI.getInfo().CXXOperatorName.BeginOpNameLoc));
-    Pieces.push_back(SourceLocation::getFromRawEncoding(
-        NI.getInfo().CXXOperatorName.EndOpNameLoc));
+    Pieces.push_back(NI.getInfo().getCXXOperatorNameBeginLoc());
+    Pieces.push_back(NI.getInfo().getCXXOperatorNameEndLoc());
   }
 
   if (WantSinglePiece) {
@@ -5526,8 +5524,6 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("CXXAccessSpecifier");
   case CXCursor_ModuleImportDecl:
     return cxstring::createRef("ModuleImport");
-  case CXCursor_OMPMetaDirective:
-    return cxstring::createRef("OMPMetaDirective");
   case CXCursor_OMPParallelDirective:
     return cxstring::createRef("OMPParallelDirective");
   case CXCursor_OMPSimdDirective:
