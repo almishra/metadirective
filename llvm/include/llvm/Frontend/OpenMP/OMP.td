@@ -60,6 +60,7 @@ def OMPC_Collapse : Clause<"collapse"> {
   let clangClass = "OMPCollapseClause";
   let flangClass = "ScalarIntConstantExpr";
 }
+def OMPC_When: Clause<"when"> {}
 def OMPC_Default : Clause<"default"> {
   let clangClass = "OMPDefaultClause";
   let flangClass = "OmpDefaultClause";
@@ -320,6 +321,14 @@ def OMPC_Notinbranch : Clause<"notinbranch"> {}
 // Definition of OpenMP directives
 //===----------------------------------------------------------------------===//
 
+def OMP_Metadirective : Directive<"metadirective"> {
+  let allowedClauses = [
+    VersionedClause<OMPC_When>
+  ];
+  let allowedOnceClauses = [
+    VersionedClause<OMPC_Default>
+  ];
+}
 def OMP_ThreadPrivate : Directive<"threadprivate"> {}
 def OMP_Parallel : Directive<"parallel"> {
   let allowedClauses = [
